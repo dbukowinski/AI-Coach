@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 
 ModeType = Literal["full", "analysis"]
-HitlModeType = Literal["gui", "cli"]
+HitlModeType = Literal["gui", "cli", "streamlit"]
 NextActionType = Literal[
     "analyze_training",
     "coaching_brief",

@@ -1097,6 +1097,79 @@ def coach_dialog_node(state: AgentState) -> AgentState:
     return state
 
 
+def streamlit_seed_coaching_messages(state: AgentState) -> AgentState:
+    """Pierwsza wiadomość coacha w UI (po coaching_brief_node)."""
+    if not (state.opening_message or "").strip():
+        _coaching_brief_deterministic(state)
+    if not state.messages:
+        msg = (state.opening_message or "").strip() or (
+            "Opowiedz proszę, jak minął ostatni tydzień treningowy — co poszło dobrze, a co Cię zaskoczyło?"
+        )
+        state.messages.append({"role": "assistant", "content": msg})
+    return state
+
+
+def streamlit_coach_after_user(state: AgentState, user_text: str) -> Tuple[AgentState, bool]:
+    """
+    Jedna tura: wiadomość użytkownika + odpowiedź modelu.
+    Zwraca (stan, plan_ready).
+    """
+    text = (user_text or "").strip()
+    if not text:
+        return state, False
+    state.messages.append({"role": "user", "content": text})
+    reply, done = _coach_turn_llm(state)
+    if not reply and not done:
+        reply = "Dzięki za rozmowę — przechodzę do ułożenia planu."
+        done = True
+    state.messages.append({"role": "assistant", "content": reply})
+    return state, done
+
+
+def streamlit_finalize_coaching_and_plan(state: AgentState) -> AgentState:
+    """Ekstrakcja preferencji z rozmowy + generate_plan_node (deterministyczny plan + ewentualne LLM w explanation)."""
+    state.dialog_complete = True
+    ctx = _extract_context_llm(state)
+    _apply_extracted_context(state, ctx)
+    _save_json(
+        DATA_DIR / "coaching_transcript.json",
+        {"messages": state.messages, "extracted": ctx},
+    )
+    return generate_plan_node(state)
+
+
+def build_streamlit_demo_agent_state() -> AgentState:
+    """
+    Stan demonstracyjny bez Stravy — do podglądu UI i dialogu.
+    """
+    state = AgentState(mode="full", hitl_mode="streamlit", days=28)
+    state.coach_analysis = "demo"
+    state.weekly_summary = {
+        "activity_count": 16,
+        "weekly_load": 36.4,
+        "zone_counts": {"z1": 6, "z2": 5, "z3": 2, "z4": 1, "z5": 0, "unknown": 2},
+    }
+    state.four_week_summary = {
+        "avg_4w_load": 44.0,
+        "current_week_load": 22.0,
+        "weeks": [],
+    }
+    state.flags = []
+    state.hr_zones_summary = {"days": 28, "hr_max": 178}
+    state.training_summary = _build_training_summary(state)
+    # Zapis do plików — generate_training_plan czyta weekly/four_week/flags z dysku.
+    _save_json(DATA_DIR / "weekly_summary.json", state.weekly_summary)
+    _save_json(DATA_DIR / "four_week_summary.json", state.four_week_summary)
+    _save_json(DATA_DIR / "flags.json", {"flags": state.flags})
+    _save_json(DATA_DIR / "hr_zones_summary.json", state.hr_zones_summary)
+    try:
+        _coaching_brief_llm(state)
+    except Exception:
+        _coaching_brief_deterministic(state)
+    state.coaching_brief_ready = True
+    return streamlit_seed_coaching_messages(state)
+
+
 def generate_plan_node(state: AgentState) -> AgentState:
     try:
         state.log("generate_plan")
