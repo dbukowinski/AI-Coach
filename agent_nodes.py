@@ -12,8 +12,9 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from agent_state import AgentState
-from hitl_dialog import show_hitl_dialog
 
+# Tkinter (hitl_dialog) — import leniwy w ask_user_node, żeby Streamlit Cloud / headless
+# mogły importować ten moduł bez _tkinter.
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -1340,6 +1341,16 @@ def ask_user_node(state: AgentState) -> AgentState:
             "'wolne we wtorek', 'środa jakościowa', 'w weekend mam czas', "
             "'maks 4 dni treningowe', 'max 2–3 treningi dziennie'."
         )
+
+    try:
+        from hitl_dialog import show_hitl_dialog
+    except ImportError as e:
+        state.add_error(
+            "GUI Tkinter nie jest dostępne (brak tkinter). "
+            f"Użyj --no-gui albo aplikacji Streamlit. Szczegóły: {e}"
+        )
+        state.done = True
+        return state
 
     accepted, feedback = show_hitl_dialog(
         state.plan_draft,
