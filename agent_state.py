@@ -8,6 +8,8 @@ ModeType = Literal["full", "analysis"]
 HitlModeType = Literal["gui", "cli"]
 NextActionType = Literal[
     "analyze_training",
+    "coaching_brief",
+    "coach_dialog",
     "generate_plan",
     "ask_user",
     "revise_plan",
@@ -33,13 +35,23 @@ class AgentState:
     weekend_focus: bool = False  # "w weekend mam czas"
     preferences_collected: bool = False
 
-    # conversational coach dialog (GUI/CLI)
+    # conversational coach dialog (GUI/CLI) — plan review / revisions
     coach_question: str = (
         "Co chcesz zmienić w tym planie? Napisz normalnie, np. "
         "'wolne we wtorek', 'środa jakościowa', 'w weekend mam czas', "
         "'maks 4 dni treningowe', 'max 2–3 treningi dziennie'."
     )
     dialog_history: List[Tuple[str, str]] = field(default_factory=list)  # (role, text)
+
+    # pre-plan coaching dialog (data-led, reactive)
+    training_summary: Dict[str, Any] = field(default_factory=dict)
+    patterns: List[str] = field(default_factory=list)
+    coaching_hypothesis: str = ""
+    opening_message: str = ""
+    coaching_brief_ready: bool = False
+    messages: List[Dict[str, str]] = field(default_factory=list)  # {"role": "assistant"|"user", "content": "..."}
+    extracted_context: Dict[str, Any] = field(default_factory=dict)
+    dialog_complete: bool = False
 
     # ingest / deterministic pipeline
     fetched_activity_ids: List[Any] = field(default_factory=list)

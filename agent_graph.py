@@ -7,6 +7,8 @@ from agent_nodes import (
     analyze_training_node,
     ask_user_node,
     clean_data_node,
+    coach_dialog_node,
+    coaching_brief_node,
     display_plan_node,
     ensure_token_node,
     fetch_activities_node,
@@ -35,6 +37,8 @@ def build_graph():
     # reasoning loop
     graph.add_node("think", think_node)
     graph.add_node("analyze_training", analyze_training_node)
+    graph.add_node("coaching_brief", coaching_brief_node)
+    graph.add_node("coach_dialog", coach_dialog_node)
     graph.add_node("generate_plan", generate_plan_node)
     graph.add_node("display_plan", display_plan_node)
     graph.add_node("ask_user", ask_user_node)
@@ -70,6 +74,8 @@ def build_graph():
         route_after_think,
         {
             "analyze_training": "analyze_training",
+            "coaching_brief": "coaching_brief",
+            "coach_dialog": "coach_dialog",
             "generate_plan": "generate_plan",
             "ask_user": "ask_user",
             "revise_plan": "revise_plan",
@@ -78,6 +84,8 @@ def build_graph():
     )
 
     graph.add_edge("analyze_training", "think")
+    graph.add_edge("coaching_brief", "think")
+    graph.add_edge("coach_dialog", "think")
     graph.add_edge("generate_plan", "display_plan")
     graph.add_edge("display_plan", "think")
     graph.add_edge("ask_user", "think")
