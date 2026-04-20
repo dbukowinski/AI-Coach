@@ -100,6 +100,12 @@ python run_agent.py --mode full --days 7
 
 If AWS credentials are missing/expired, the agent falls back to deterministic logic.
 
+## Streamlit (Community Cloud)
+
+- Lokalnie: `streamlit run app.py` (albo `streamlit run streamlit_app.py` — cienka owijka na `app.py`).
+- Na **Streamlit Cloud** w *Settings → Main file path* ustaw **`streamlit_app.py`** lub **`app.py`**.  
+  **Nie** ustawiaj `streamlit_runner.py` — to tylko moduł z funkcjami pipeline, bez UI (wtedy w przeglądarce widać sam opis z komentarzy / pustą stronę).
+
 ## Outputs
 
 Generated artifacts (ignored by git) are written to `data/`, e.g.:

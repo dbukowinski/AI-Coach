@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-"""
-Uruchomienie pipeline Strava → analiza → briefing coachingowy dla Streamlit.
-Pełny dialog i generowanie planu odbywają się w app.py (session_state + wywołania z agent_nodes).
-"""
+# Pipeline Strava → analiza → briefing (funkcje dla Streamlit).
+# UI i dialog: app.py + session_state. NIE ustawiaj tego pliku jako Main file na Cloud.
 
 from agent_state import AgentState
 from agent_nodes import (
@@ -40,3 +38,18 @@ def run_sync_pipeline_to_coaching_brief(state: AgentState) -> AgentState:
         if state.done or state.errors:
             return state
     return streamlit_seed_coaching_messages(state)
+
+
+if __name__ == "__main__":
+    # Ktoś uruchomił `streamlit run streamlit_runner.py` — to nie jest aplikacja UI.
+    import streamlit as st
+
+    st.set_page_config(page_title="AI Coach — zła konfiguracja", layout="centered")
+    st.error(
+        "**Ten plik nie jest aplikacją Streamlit.**\n\n"
+        "W *Settings → Main file path* ustaw **`streamlit_app.py`** albo **`app.py`**.\n\n"
+        "`streamlit_runner.py` to tylko funkcje pomocnicze (import z `app.py`)."
+    )
+    st.markdown(
+        "[Dokumentacja Streamlit — punkt wejścia (entrypoint)](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app#entrypoint)"
+    )
