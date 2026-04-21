@@ -7,6 +7,7 @@ Uruchomienie z katalogu projektu:
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -26,13 +27,13 @@ st.set_page_config(
     page_title="AI Coach",
     page_icon="🏃",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
     """
 <style>
-    .block-container { padding-top: 1rem; padding-bottom: 0; max-width: 100%; }
+    .block-container { padding-top: 1rem; padding-bottom: 0; }
     [data-testid="stChatInput"] { border-top: 1px solid #eee; }
     [data-testid="stMetricLabel"] { font-size: 12px !important; }
     .rest-day { opacity: 0.45; }
