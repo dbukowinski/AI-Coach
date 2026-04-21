@@ -1176,6 +1176,29 @@ def streamlit_finalize_coaching_and_plan(state: AgentState) -> AgentState:
     return generate_plan_node(state)
 
 
+def streamlit_revise_plan_after_user(state: AgentState, user_text: str) -> AgentState:
+    """
+    Kontynuacja dialogu PO wygenerowaniu planu: traktujemy wiadomość jako feedback
+    i przepuszczamy przez `revise_plan_node`, a następnie dopisujemy odpowiedź coacha
+    do `state.messages` (żeby UI miało ciągłą historię).
+    """
+    text = (user_text or "").strip()
+    if not text:
+        return state
+
+    # user mówi w czacie
+    state.messages.append({"role": "user", "content": text})
+
+    # rewizja planu (deterministycznie lub przez Bedrock, zależnie od dostępności)
+    state.user_feedback = text
+    state = revise_plan_node(state)
+
+    # odpowiedź coacha do UI
+    reply = (state.coach_question or "").strip() or "Zaktualizowałem plan. Co jeszcze dopracować?"
+    state.messages.append({"role": "assistant", "content": reply})
+
+    return state
+
 def build_streamlit_demo_agent_state() -> AgentState:
     """
     Stan demonstracyjny bez Stravy — do podglądu UI i dialogu.

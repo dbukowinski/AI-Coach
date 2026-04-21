@@ -18,6 +18,7 @@ from agent_nodes import (
     build_streamlit_demo_agent_state,
     streamlit_coach_after_user,
     streamlit_finalize_coaching_and_plan,
+    streamlit_revise_plan_after_user,
 )
 from streamlit_runner import run_sync_pipeline_to_coaching_brief
 
@@ -490,18 +491,23 @@ with chat_col:
 
     if prompt := st.chat_input(
         "Napisz do trenera…",
-        disabled=not chat_ready or plan_done,
+        disabled=not chat_ready,
     ):
         if agent:
             with st.spinner("Coach myśli…"):
-                agent, plan_ready = streamlit_coach_after_user(agent, prompt)
-                if plan_ready:
-                    agent = streamlit_finalize_coaching_and_plan(agent)
+                # Przed planem: dialog coachingowy -> PLAN_READY -> generowanie planu
+                if not agent.plan_draft:
+                    agent, plan_ready = streamlit_coach_after_user(agent, prompt)
+                    if plan_ready:
+                        agent = streamlit_finalize_coaching_and_plan(agent)
+                # Po planie: kolejne wiadomości rewizują plan
+                else:
+                    agent = streamlit_revise_plan_after_user(agent, prompt)
                 st.session_state.agent = agent
         st.rerun()
 
     if plan_done:
-        st.success("Plan jest po prawej — możesz odświeżyć briefing, aby zacząć od nowa.")
+        st.info("Plan jest po prawej — możesz pisać dalej, a ja będę go aktualizował na podstawie Twoich wiadomości.")
 
 # ── Plan ──────────────────────────────────────────────────────────────────────
 
