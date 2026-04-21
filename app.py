@@ -243,6 +243,41 @@ with st.sidebar:
             "`STRAVA_REFRESH_TOKEN` w Secrets."
         )
 
+    with st.expander("Diagnostyka Stravy (Cloud)"):
+        import os
+
+        def _mask(v: object) -> str:
+            if v is None:
+                return "brak"
+            s = str(v).strip()
+            if not s:
+                return "puste"
+            if len(s) <= 6:
+                return "***"
+            return s[:2] + "…" + s[-2:]
+
+        keys = [
+            "STRAVA_CLIENT_ID",
+            "STRAVA_CLIENT_SECRET",
+            "STRAVA_REFRESH_TOKEN",
+            "STRAVA_ACCESS_TOKEN",
+            "STRAVA_EXPIRES_AT",
+        ]
+        st.markdown("**Wykryte wartości (maskowane):**")
+        for k in keys:
+            st.write(f"- `{k}`: `{_mask(os.getenv(k))}`")
+
+        if st.button("Test: odśwież token + pobierz 1 aktywność", use_container_width=True):
+            try:
+                import sync_strava
+
+                sync_strava.ensure_valid_token()
+                acts = sync_strava.fetch_last_days(days=1, per_page=1)
+                st.success(f"OK — token działa. Pobrano {len(acts)} aktywność(‑i) z ostatniego dnia.")
+            except Exception as e:
+                st.error("Strava test nie powiódł się.")
+                st.code(str(e))
+
 # ── Nagłówek ──────────────────────────────────────────────────────────────────
 
 st.markdown("### 🏃 AI Coach")
