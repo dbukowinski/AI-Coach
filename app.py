@@ -424,7 +424,12 @@ with st.sidebar:
                 st.success(f"OK — token działa. Pobrano {len(acts)} aktywność(‑i) z ostatniego dnia.")
             except Exception as e:
                 st.error("Strava test nie powiódł się.")
-                st.code(str(e))
+                import traceback
+
+                st.markdown("**Szczegóły błędu:**")
+                st.code(repr(e))
+                st.markdown("**Traceback:**")
+                st.code(traceback.format_exc())
 
 # ── Nagłówek ──────────────────────────────────────────────────────────────────
 
