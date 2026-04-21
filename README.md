@@ -105,6 +105,18 @@ If AWS credentials are missing/expired, the agent falls back to deterministic lo
 - Lokalnie: `streamlit run app.py` (albo `streamlit run streamlit_app.py` — cienka owijka na `app.py`).
 - Na **Streamlit Cloud** w *Settings → Main file path* ustaw **`streamlit_app.py`** lub **`app.py`**.  
   **Nie** ustawiaj `streamlit_runner.py` — to tylko moduł z funkcjami pipeline, bez UI (wtedy w przeglądarce widać sam opis z komentarzy / pustą stronę).
+- **Strava na Cloud:** repozytorium nie zawiera `.env`. W *Settings → Secrets* dodaj te same zmienne co lokalnie, np. w TOML:
+
+```toml
+STRAVA_CLIENT_ID = "..."
+STRAVA_CLIENT_SECRET = "..."
+STRAVA_REFRESH_TOKEN = "..."
+STRAVA_ACCESS_TOKEN = ""
+STRAVA_EXPIRES_AT = "0"
+```
+
+  Albo sekcja `[strava]` z kluczami `client_id`, `client_secret`, `refresh_token` (i opcjonalnie `access_token`, `expires_at`). Po zmianie sekretów: **Reboot app**.  
+  Odświeżenie access tokena działa w pamięci procesu; zapis z powrotem do pliku `.env` jest pomijany, gdy pliku nie ma (typowe na Cloud).
 
 ## Outputs
 

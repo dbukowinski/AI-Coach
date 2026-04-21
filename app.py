@@ -218,8 +218,30 @@ with st.sidebar:
         st.rerun()
 
     st.caption(
-        "Bez demo wymagane są token Strava / AWS (Bedrock) zgodnie z README projektu."
+        "Bez demo: Strava + (opcjonalnie) AWS Bedrock. Lokalnie: plik `.env`. "
+        "Na Streamlit Cloud: **Settings → Secrets** (nie commituj sekretów)."
     )
+    with st.expander("Jak dodać Stravę na Streamlit Cloud"):
+        st.markdown(
+            "W *Settings → Secrets* wklej TOML z tymi kluczami (tak jak w `.env`):"
+        )
+        st.code(
+            'STRAVA_CLIENT_ID = "twoj_client_id"\n'
+            'STRAVA_CLIENT_SECRET = "twoj_secret"\n'
+            'STRAVA_REFRESH_TOKEN = "refresh_z_oauth"\n'
+            'STRAVA_ACCESS_TOKEN = "opcjonalnie"\n'
+            'STRAVA_EXPIRES_AT = "0"',
+            language="toml",
+        )
+        st.markdown(
+            "Alternatywnie zagnieżdżona sekcja `[strava]` z polami "
+            "`client_id`, `client_secret`, `refresh_token`, `access_token`, `expires_at`."
+        )
+        st.markdown(
+            "Po zapisaniu sekretów użyj **Reboot app**. Odświeżenie tokenów w chmurze "
+            "nie zapisuje się do pliku — przy długiej przerwie możesz musieć zaktualizować "
+            "`STRAVA_REFRESH_TOKEN` w Secrets."
+        )
 
 # ── Nagłówek ──────────────────────────────────────────────────────────────────
 
