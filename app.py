@@ -54,6 +54,14 @@ st.markdown(
         line-height: 1.55;
         margin-top: 12px;
     }
+
+    /* tytuł aplikacji — unikaj ucięcia emoji/fontów */
+    .app-title {
+        font-size: 30px;
+        font-weight: 800;
+        line-height: 1.35;
+        padding: 0.25rem 0 0.5rem 0;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -377,7 +385,7 @@ with st.sidebar:
 
 # ── Nagłówek ──────────────────────────────────────────────────────────────────
 
-st.markdown("### 🏃 AI Coach")
+st.markdown('<div class="app-title">🏃 AI Coach</div>', unsafe_allow_html=True)
 agent: Optional[AgentState] = st.session_state.agent
 
 if agent and not agent.errors and agent.coaching_brief_ready:
