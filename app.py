@@ -259,27 +259,34 @@ with st.sidebar:
         "Bez demo: Strava + (opcjonalnie) AWS Bedrock. Lokalnie: plik `.env`. "
         "Na Streamlit Cloud: **Settings → Secrets** (nie commituj sekretów)."
     )
-    with st.expander("Jak dodać Stravę na Streamlit Cloud"):
+    with st.expander("Jak dodać Stravę (prosto i jasno)"):
         st.markdown(
-            "W *Settings → Secrets* wklej TOML z tymi kluczami (tak jak w `.env`):"
+            "**Co musisz zrobić TY (właściciel apki) – tylko raz:**\n"
+            "1. Wejdź w `https://www.strava.com/settings/api` i kliknij **Create Application**.\n"
+            "2. Skopiuj z tej strony:\n"
+            "   - **Client ID** → `STRAVA_CLIENT_ID`\n"
+            "   - **Client Secret** → `STRAVA_CLIENT_SECRET`\n"
+            "3. W tym samym formularzu Stravy ustaw:\n"
+            "   - **Authorization Callback Domain** = domena Twojej apki (np. `zabiegany.streamlit.app`).\n"
+            "4. W Streamlit Cloud wejdź w **Manage app → Settings → Secrets** i wklej:\n"
         )
         st.code(
-            'STRAVA_CLIENT_ID = "twoj_client_id"\n'
-            'STRAVA_CLIENT_SECRET = "twoj_secret"\n'
-            'STRAVA_REFRESH_TOKEN = "refresh_z_oauth"\n'
-            'STRAVA_ACCESS_TOKEN = "opcjonalnie"\n'
-            'STRAVA_EXPIRES_AT = "0"',
+            'STRAVA_CLIENT_ID = "12345"  # skopiuj: Strava → Settings → API → Client ID\n'
+            'STRAVA_CLIENT_SECRET = "a1b2c3d4e5f6..."  # skopiuj: Client Secret\n'
+            'APP_URL = "https://zabiegany.streamlit.app"  # URL z paska przeglądarki\n',
             language="toml",
         )
         st.markdown(
-            "Alternatywnie zagnieżdżona sekcja `[strava]` z polami "
-            "`client_id`, `client_secret`, `refresh_token`, `access_token`, `expires_at`."
+            "**Wzór domeny do Stravy:**\n"
+            "- Jeśli Twój URL to `https://zabiegany.streamlit.app` → w Stravie wpisz **tylko**: `zabiegany.streamlit.app`\n"
+            "- Bez `https://` i bez ścieżek.\n"
         )
         st.markdown(
-            "Po zapisaniu sekretów użyj **Reboot app**. Odświeżenie tokenów w chmurze "
-            "nie zapisuje się do pliku — przy długiej przerwie możesz musieć zaktualizować "
-            "`STRAVA_REFRESH_TOKEN` w Secrets."
+            "**Co robi użytkownik (biegacz):**\n"
+            "- Otwiera sekcję **„Połącz Stravę (automatyczny OAuth…)”**, klika link, loguje się i akceptuje.\n"
+            "- Tokeny zapisują się automatycznie po stronie serwera (w `data/`), więc nic nie wkleja ręcznie."
         )
+        st.markdown("Na koniec kliknij **Reboot app** (Streamlit Cloud) po zmianie Secrets.")
 
     with st.expander("Połącz Stravę (automatyczny OAuth w aplikacji)"):
         st.markdown(
