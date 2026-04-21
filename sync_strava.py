@@ -91,6 +91,36 @@ try:
 except ValueError:
     EXPIRES_AT = 0
 
+
+def _hydrate_tokens_from_local_store_if_missing() -> None:
+    """
+    Dla Streamlit: po OAuth zapisujemy refresh token do `data/strava_tokens.json` (gitignored).
+    Jeśli env nie ma tokenów (typowe na Cloud), wczytaj je z tego pliku.
+    """
+    global ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT
+    if REFRESH_TOKEN and ACCESS_TOKEN:
+        return
+    try:
+        from strava_token_store import get_active_tokens
+
+        t = get_active_tokens()
+        if not t:
+            return
+        if not ACCESS_TOKEN:
+            ACCESS_TOKEN = str(t.get("access_token") or "").strip() or None
+        if not REFRESH_TOKEN:
+            REFRESH_TOKEN = str(t.get("refresh_token") or "").strip() or None
+        if not EXPIRES_AT:
+            try:
+                EXPIRES_AT = int(t.get("expires_at") or 0)
+            except Exception:
+                EXPIRES_AT = 0
+    except Exception:
+        return
+
+
+_hydrate_tokens_from_local_store_if_missing()
+
 TOKEN_URL = "https://www.strava.com/oauth/token"
 ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
 ACTIVITY_DETAIL_URL = "https://www.strava.com/api/v3/activities/{id}"
@@ -135,6 +165,21 @@ def refresh_tokens() -> None:
             set_key(dotenv_path, "STRAVA_EXPIRES_AT", str(EXPIRES_AT))
         except OSError:
             pass
+
+    # Persist do lokalnego store (Streamlit UX)
+    try:
+        from strava_token_store import upsert_tokens
+
+        # Jeśli nie znamy athlete_id, zapisujemy pod "default".
+        # (Dokładne athlete_id ustawiamy podczas OAuth exchange w UI.)
+        upsert_tokens(
+            "default",
+            access_token=str(ACCESS_TOKEN or ""),
+            refresh_token=str(REFRESH_TOKEN or ""),
+            expires_at=int(EXPIRES_AT),
+        )
+    except Exception:
+        pass
 
 
 def ensure_valid_token(buffer_seconds: int = 60) -> None:

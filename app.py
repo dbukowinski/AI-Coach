@@ -284,8 +284,8 @@ with st.sidebar:
     with st.expander("Połącz Stravę (automatyczny OAuth w aplikacji)"):
         st.markdown(
             "Ta sekcja **automatyzuje uzyskanie** `STRAVA_REFRESH_TOKEN` w przeglądarce. "
-            "Streamlit Cloud **nie pozwala zapisać** sekretów programowo, więc na końcu "
-            "dostaniesz token do wklejenia w *Settings → Secrets*."
+            "Tokeny zostaną zapisane po stronie serwera (w `data/`, gitignored), "
+            "więc użytkownik nie musi wklejać ich do Secrets."
         )
 
         client_id = _get_secret("STRAVA_CLIENT_ID") or (os.getenv("STRAVA_CLIENT_ID") or "").strip()
@@ -332,18 +332,32 @@ with st.sidebar:
                         refresh_token = tokens.get("refresh_token", "")
                         access_token = tokens.get("access_token", "")
                         expires_at = tokens.get("expires_at", 0)
+                        athlete_id = None
+                        try:
+                            athlete_id = (tokens.get("athlete") or {}).get("id")
+                        except Exception:
+                            athlete_id = None
                         st.success("Połączenie OK — odebrałem tokeny ze Stravy.")
-                        st.markdown("Wklej to do *Settings → Secrets* i zrób **Reboot app**:")
-                        st.code(
-                            f'STRAVA_REFRESH_TOKEN = "{refresh_token}"\n'
-                            f'STRAVA_ACCESS_TOKEN = "{access_token}"\n'
-                            f'STRAVA_EXPIRES_AT = "{expires_at}"',
-                            language="toml",
-                        )
-                        # Ułatwienie: ustaw w bieżącym procesie, żeby diagnostyka zadziałała bez rebootu.
+                        # Ułatwienie: ustaw w bieżącym procesie, żeby pipeline zadziałał od razu.
                         os.environ["STRAVA_REFRESH_TOKEN"] = str(refresh_token)
                         os.environ["STRAVA_ACCESS_TOKEN"] = str(access_token)
                         os.environ["STRAVA_EXPIRES_AT"] = str(expires_at)
+
+                        # Persist dla kolejnych wejść (bez Secrets)
+                        try:
+                            from strava_token_store import upsert_tokens
+
+                            upsert_tokens(
+                                athlete_id or "default",
+                                access_token=str(access_token),
+                                refresh_token=str(refresh_token),
+                                expires_at=int(expires_at or 0),
+                            )
+                        except Exception as e:
+                            st.warning("Nie udało się zapisać tokenów lokalnie (zostaną tylko na tę sesję).")
+                            st.code(str(e))
+
+                        st.info("Możesz teraz kliknąć „Przygotuj dane i briefing” — bez wklejania sekretów.")
                     except Exception as e:
                         st.error("Nie udało się wymienić `code` na tokeny.")
                         st.code(str(e))
