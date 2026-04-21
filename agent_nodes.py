@@ -940,6 +940,38 @@ def _strip_plan_ready_marker(text: str) -> Tuple[str, bool]:
     return text.strip(), False
 
 
+def _coach_turn_fallback_deterministic(state: AgentState) -> Tuple[str, bool]:
+    """
+    Fallback gdy LLM (Bedrock) jest niedostępny (np. brak AWS credentials).
+    Zwraca krótką wypowiedź + jedno pytanie i od razu przechodzi do planu.
+    """
+    w = state.weekly_summary or {}
+    fw = state.four_week_summary or {}
+    wl = w.get("weekly_load")
+    av = fw.get("avg_4w_load")
+    bits: List[str] = []
+    if wl is not None and av is not None:
+        try:
+            wlf = float(wl)
+            avf = float(av)
+            if avf > 0:
+                if wlf < avf * 0.8:
+                    bits.append("Widzę, że ostatni tydzień był wyraźnie lżejszy niż Twoja średnia z 4 tygodni.")
+                elif wlf > avf * 1.25:
+                    bits.append("Widzę, że ostatni tydzień był mocniejszy niż Twoja średnia z 4 tygodni.")
+        except Exception:
+            pass
+    if not bits and state.patterns:
+        bits.append(f"Z danych: {state.patterns[0]}")
+    if not bits:
+        bits.append("OK — mam ogólny obraz z danych z ostatnich tygodni.")
+
+    question = (
+        "Zanim ułożę plan: jaki jest najbliższy cel (start / dystans / data) i ile dni realnie możesz biegać w tym tygodniu?"
+    )
+    return (" ".join(bits) + " " + question).strip(), True
+
+
 def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
     summary_json = json.dumps(state.training_summary, ensure_ascii=False, indent=2)
     patterns_txt = "\n".join(f"- {p}" for p in state.patterns) or "- (brak)"
@@ -963,9 +995,14 @@ def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
         f"Dotychczasowa rozmowa:\n{history}\n\n"
         "Napisz TERAZ kolejną wypowiedź trenera (tylko treść wypowiedzi, bez nagłówków)."
     )
-    raw = _call_bedrock(prompt, max_tokens=600)
-    visible, done = _strip_plan_ready_marker(raw)
-    return visible, done
+    try:
+        raw = _call_bedrock(prompt, max_tokens=600)
+        visible, done = _strip_plan_ready_marker(raw)
+        return visible, done
+    except Exception as e:
+        # Bedrock jest opcjonalny – w razie braku credentials nie crashujemy UI.
+        state.log(f"coach_turn LLM unavailable, fallback to deterministic: {e}")
+        return _coach_turn_fallback_deterministic(state)
 
 
 def _extract_context_llm(state: AgentState) -> Dict[str, Any]:
