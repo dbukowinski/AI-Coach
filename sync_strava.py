@@ -23,12 +23,73 @@ RAW_FILE = DATA_DIR / "activities_raw.json"
 dotenv_path = find_dotenv()
 load_dotenv(dotenv_path)
 
+
+def _hydrate_strava_env_from_streamlit_secrets() -> None:
+    """
+    Streamlit Community Cloud nie ma pliku .env — sekrety ustawia się w UI (Secrets).
+    Kopiuje je do os.environ przed odczytem zmiennych Stravy.
+    Obsługa: płaskie klucze STRAVA_* albo sekcja [strava] w TOML.
+    """
+    try:
+        import streamlit as st  # type: ignore
+    except ImportError:
+        return
+    try:
+        sec = getattr(st, "secrets", None)
+        if sec is None:
+            return
+    except Exception:
+        return
+
+    def _set_from_flat(key: str) -> None:
+        try:
+            if key in sec and sec[key] not in (None, ""):
+                os.environ[key] = str(sec[key]).strip()
+        except Exception:
+            pass
+
+    for k in (
+        "STRAVA_CLIENT_ID",
+        "STRAVA_CLIENT_SECRET",
+        "STRAVA_ACCESS_TOKEN",
+        "STRAVA_REFRESH_TOKEN",
+        "STRAVA_EXPIRES_AT",
+    ):
+        _set_from_flat(k)
+
+    try:
+        if "strava" in sec:
+            sub = sec["strava"]
+            mapping = (
+                ("STRAVA_CLIENT_ID", "client_id"),
+                ("STRAVA_CLIENT_SECRET", "client_secret"),
+                ("STRAVA_ACCESS_TOKEN", "access_token"),
+                ("STRAVA_REFRESH_TOKEN", "refresh_token"),
+                ("STRAVA_EXPIRES_AT", "expires_at"),
+            )
+            for env_key, sub_key in mapping:
+                try:
+                    val = sub.get(sub_key) if hasattr(sub, "get") else sub[sub_key]
+                except Exception:
+                    val = None
+                if val not in (None, ""):
+                    os.environ[env_key] = str(val).strip()
+    except Exception:
+        pass
+
+
+_hydrate_strava_env_from_streamlit_secrets()
+
 CLIENT_ID = os.getenv("STRAVA_CLIENT_ID")
 CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET")
 
 ACCESS_TOKEN = os.getenv("STRAVA_ACCESS_TOKEN")
 REFRESH_TOKEN = os.getenv("STRAVA_REFRESH_TOKEN")
-EXPIRES_AT = int(os.getenv("STRAVA_EXPIRES_AT", "0"))
+_raw_exp = os.getenv("STRAVA_EXPIRES_AT", "0") or "0"
+try:
+    EXPIRES_AT = int(_raw_exp)
+except ValueError:
+    EXPIRES_AT = 0
 
 TOKEN_URL = "https://www.strava.com/oauth/token"
 ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
@@ -45,7 +106,10 @@ def refresh_tokens() -> None:
 
     if not (CLIENT_ID and CLIENT_SECRET and REFRESH_TOKEN):
         raise RuntimeError(
-            "Brakuje STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN w .env"
+            "Brakuje STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN. "
+            "Lokalnie: ustaw w pliku .env. Streamlit Cloud: Settings → Secrets — "
+            "dodaj te same klucze (np. STRAVA_CLIENT_ID = \"...\") albo sekcję [strava] "
+            "z client_id, client_secret, refresh_token."
         )
 
     data = {
@@ -63,10 +127,14 @@ def refresh_tokens() -> None:
     REFRESH_TOKEN = payload["refresh_token"]
     EXPIRES_AT = int(payload["expires_at"])
 
-    # Persist updated tokens
-    set_key(dotenv_path, "STRAVA_ACCESS_TOKEN", ACCESS_TOKEN)
-    set_key(dotenv_path, "STRAVA_REFRESH_TOKEN", REFRESH_TOKEN)
-    set_key(dotenv_path, "STRAVA_EXPIRES_AT", str(EXPIRES_AT))
+    # Persist updated tokens (lokalnie w .env; na Streamlit Cloud często brak pliku — tylko RAM)
+    if dotenv_path and str(dotenv_path).strip() and Path(dotenv_path).is_file():
+        try:
+            set_key(dotenv_path, "STRAVA_ACCESS_TOKEN", ACCESS_TOKEN)
+            set_key(dotenv_path, "STRAVA_REFRESH_TOKEN", REFRESH_TOKEN)
+            set_key(dotenv_path, "STRAVA_EXPIRES_AT", str(EXPIRES_AT))
+        except OSError:
+            pass
 
 
 def ensure_valid_token(buffer_seconds: int = 60) -> None:

@@ -12,8 +12,9 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from agent_state import AgentState
-from hitl_dialog import show_hitl_dialog
 
+# Tkinter (hitl_dialog) — import leniwy w ask_user_node, żeby Streamlit Cloud / headless
+# mogły importować ten moduł bez _tkinter.
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -800,12 +801,387 @@ def analyze_training_node(state: AgentState) -> AgentState:
     return state
 
 
+def _parse_json_object(raw: str) -> Optional[Dict[str, Any]]:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if len(lines) >= 2:
+            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            obj = json.loads(text[start : end + 1])
+            return obj if isinstance(obj, dict) else None
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _build_training_summary(state: AgentState) -> Dict[str, Any]:
+    return {
+        "weekly_summary": state.weekly_summary,
+        "four_week_summary": state.four_week_summary,
+        "flags": state.flags,
+        "hr_zones_summary": state.hr_zones_summary,
+    }
+
+
+def _coaching_brief_deterministic(state: AgentState) -> None:
+    w = state.weekly_summary or {}
+    fw = state.four_week_summary or {}
+    fl = state.flags or []
+    obs: List[str] = []
+    wl = w.get("weekly_load")
+    av = fw.get("avg_4w_load")
+    if wl is not None and av not in (None, 0, 0.0):
+        try:
+            wlf, avf = float(wl), float(av)
+            if avf > 0 and wlf < avf * 0.75:
+                obs.append(
+                    f"Ostatni tydzień: obciążenie wyraźnie poniżej 4-tygodniowej średniej ({wlf} vs śr. {avf})."
+                )
+            elif avf > 0 and wlf > avf * 1.25:
+                obs.append(
+                    f"Ostatni tydzień: obciążenie powyżej średniej 4-tygodniowej ({wlf} vs śr. {avf})."
+                )
+        except (TypeError, ValueError):
+            pass
+    if fl:
+        obs.append("Sygnały z analizy: " + ", ".join(str(x) for x in fl[:6]))
+    if not obs:
+        obs.append("Wzorce są jeszcze mało czytelne — zaczniemy od formy i celu na najbliższe dni.")
+    state.patterns = obs[:5]
+    state.coaching_hypothesis = (
+        "Być może tydzień był celowo lżejszy albo życie codzienne zajęło priorytet — warto to potwierdzić."
+    )
+    state.opening_message = (
+        "Zanim ułożymy plan: jak oceniasz ostatni tydzień treningowy "
+        "względem tego, co chciałeś zrobić — poszło po Twojej myśli, czy coś go rozbiło?"
+    )
+
+
+def _coaching_brief_llm(state: AgentState) -> None:
+    payload = _build_training_summary(state)
+    prompt = (
+        "Jesteś doświadczonym trenerem biegowym. Przeanalizuj poniższe metryki (JSON) "
+        "i przygotuj KRÓTKI briefing dla siebie (nie kopiuj surowych liczb do usera — interpretuj).\n\n"
+        "Zwróć WYŁĄCZNIE poprawny JSON (bez markdown) o kluczach:\n"
+        '- "observations": tablica 2-3 krótkich obserwacji po polsku (konkret, coachingowy ton)\n'
+        '- "opening_question": jedno pierwsze zdanie do sportowca po polsku — zaczyna od danych/wzorca, '
+        "nie od suchych pytań typu 'ile dni trenujesz'\n"
+        '- "hypothesis": jedno zdanie — co prawdopodobnie się dzieje\n\n'
+        f"Dane:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+    raw = _call_bedrock(prompt, max_tokens=700)
+    data = _parse_json_object(raw)
+    if not data:
+        raise ValueError("brief JSON parse failed")
+    obs = data.get("observations")
+    if not isinstance(obs, list) or not obs:
+        raise ValueError("brief missing observations")
+    oq = data.get("opening_question")
+    if not isinstance(oq, str) or not oq.strip():
+        raise ValueError("brief missing opening_question")
+    hyp = data.get("hypothesis", "")
+    state.patterns = [str(x).strip() for x in obs[:5] if str(x).strip()]
+    state.opening_message = oq.strip()
+    state.coaching_hypothesis = str(hyp).strip() if isinstance(hyp, str) else ""
+
+
+def coaching_brief_node(state: AgentState) -> AgentState:
+    """
+    Przygotowuje briefing coachingowy przed dialogiem (obserwacje + otwarcie).
+    """
+    try:
+        state.log("coaching_brief")
+        state.training_summary = _build_training_summary(state)
+        try:
+            _coaching_brief_llm(state)
+        except Exception as e:
+            state.log(f"coaching_brief LLM fallback: {e}")
+            _coaching_brief_deterministic(state)
+        state.coaching_brief_ready = True
+        _save_json(
+            DATA_DIR / "coaching_brief.json",
+            {
+                "training_summary": state.training_summary,
+                "patterns": state.patterns,
+                "opening_message": state.opening_message,
+                "hypothesis": state.coaching_hypothesis,
+            },
+        )
+    except Exception as e:
+        state.add_error(f"coaching_brief failed: {e}")
+        state.done = True
+    return state
+
+
+def _format_messages_for_prompt(messages: List[Dict[str, str]]) -> str:
+    lines: List[str] = []
+    for m in messages:
+        role = m.get("role", "")
+        content = (m.get("content") or "").strip()
+        label = "Trener" if role == "assistant" else "Sportowiec"
+        lines.append(f"{label}: {content}")
+    return "\n".join(lines)
+
+
+def _strip_plan_ready_marker(text: str) -> Tuple[str, bool]:
+    marker = "PLAN_READY"
+    if marker in text:
+        cleaned = text.replace(marker, "").strip()
+        return cleaned, True
+    return text.strip(), False
+
+
+def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
+    summary_json = json.dumps(state.training_summary, ensure_ascii=False, indent=2)
+    patterns_txt = "\n".join(f"- {p}" for p in state.patterns) or "- (brak)"
+    flags_txt = "\n".join(f"- {f}" for f in (state.flags or [])) or "- (brak)"
+    history = _format_messages_for_prompt(state.messages)
+
+    prompt = (
+        "Jesteś doświadczonym trenerem biegowym. Prowadzisz krótką rozmowę przed ułożeniem planu tygodnia.\n\n"
+        "Zasady:\n"
+        "- Masz dostęp do danych z ostatnich tygodni — cytuj je konkretnie tam gdzie ma to sens.\n"
+        "- Jedno główne pytanie na raz (możesz najpierw 1-2 zdania obserwacji lub opinii).\n"
+        "- Miej opinię — nie zbieraj danych jak formularz; reaguj na to, co już wiesz z metryk.\n"
+        "- Gdy masz wystarczający kontekst (cel, dostępność, ewentualne ograniczenia, zmęczenie/kontuzja) "
+        "i możesz ułożyć sensowny tydzień — ZAKOŃCZ swoją wypowiedź dokładnie tokenem PLAN_READY "
+        "(bez tekstu po nim).\n"
+        "- Pisz po polsku, naturalnie, krócej niż pół strony A4.\n\n"
+        f"Dane treningowe (JSON):\n{summary_json}\n\n"
+        f"Zaobserwowane wzorce / briefing:\n{patterns_txt}\n\n"
+        f"Flagi ryzyka:\n{flags_txt}\n\n"
+        f"Hipoteza trenera (wewn.): {state.coaching_hypothesis or '(brak)'}\n\n"
+        f"Dotychczasowa rozmowa:\n{history}\n\n"
+        "Napisz TERAZ kolejną wypowiedź trenera (tylko treść wypowiedzi, bez nagłówków)."
+    )
+    raw = _call_bedrock(prompt, max_tokens=600)
+    visible, done = _strip_plan_ready_marker(raw)
+    return visible, done
+
+
+def _extract_context_llm(state: AgentState) -> Dict[str, Any]:
+    conv = _format_messages_for_prompt(state.messages)
+    prompt = (
+        "Z rozmowy trener–sportowiec wyciągnij preferencje do planowania tygodnia.\n"
+        "Zwróć WYŁĄCZNIE JSON (bez markdown) z opcjonalnymi polami:\n"
+        "{\n"
+        '  "max_weekly_minutes": number | null,\n'
+        '  "days_off": ["monday","tuesday",...] | [],\n'
+        '  "preferred_quality_days": ["wednesday",...] | [],\n'
+        '  "weekend_focus": true | false,\n'
+        '  "max_training_days": number | null,\n'
+        '  "max_sessions_per_day": 1 | 2 | 3 | null,\n'
+        '  "goal_summary": string | ""\n'
+        "}\n"
+        "Używaj angielskich nazw dni tygodnia (monday..sunday). Jeśli czegoś nie było — null lub [].\n\n"
+        f"Rozmowa:\n{conv}"
+    )
+    try:
+        raw = _call_bedrock(prompt, max_tokens=500)
+        data = _parse_json_object(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _apply_extracted_context(state: AgentState, ctx: Dict[str, Any]) -> None:
+    state.extracted_context = ctx
+    mwm = ctx.get("max_weekly_minutes")
+    if isinstance(mwm, int) and mwm >= 60:
+        state.max_weekly_minutes = mwm
+
+    days_off = ctx.get("days_off")
+    if isinstance(days_off, list) and days_off:
+        state.days_off = sorted({str(d).lower() for d in days_off if d})
+
+    qd = ctx.get("preferred_quality_days")
+    if isinstance(qd, list) and qd:
+        state.preferred_quality_days = sorted({str(d).lower() for d in qd if d})
+
+    if ctx.get("weekend_focus") is True:
+        state.weekend_focus = True
+
+    mtd = ctx.get("max_training_days")
+    if isinstance(mtd, int) and 1 <= mtd <= 7:
+        state.max_training_days = mtd
+
+    mspd = ctx.get("max_sessions_per_day")
+    if mspd in (1, 2, 3):
+        state.max_sessions_per_day = int(mspd)
+
+
+def _enrich_plan_explanation_with_conversation(state: AgentState, plan: Dict[str, Any]) -> Dict[str, Any]:
+    conv = _format_messages_for_prompt(state.messages)
+    summary_json = json.dumps(state.training_summary, ensure_ascii=False, indent=2)
+    prompt = (
+        "Jesteś trenerem biegowym. Na podstawie danych treningowych i rozmowy dopisz krótki komentarz "
+        "do planu (2-5 zdań po polsku): co jest najważniejsze w tym tygodniu i jak rozmowa to uzasadnia.\n"
+        "Odpowiedz WYŁĄCZNIE plain text, bez JSON.\n\n"
+        f"Dane:\n{summary_json}\n\nRozmowa:\n{conv}\n\n"
+        f"Obecne uzasadnienie planu:\n{plan.get('explanation', '')}"
+    )
+    try:
+        addon = _call_bedrock(prompt, max_tokens=400).strip()
+        if addon:
+            base = (plan.get("explanation") or "").strip()
+            plan["explanation"] = (base + "\n\n— Komentarz trenera —\n" + addon).strip()
+    except Exception as e:
+        state.log(f"plan explanation enrich skipped: {e}")
+    return plan
+
+
+def coach_dialog_node(state: AgentState) -> AgentState:
+    """
+    Prowadzi dialog coachingowy przed planem. W CLI — pętla z input().
+    W GUI — pomijamy (produkt działa); pełny dialog w terminalu (--no-gui).
+    """
+    try:
+        state.log("coach_dialog")
+
+        if state.hitl_mode != "cli":
+            state.log("coach_dialog: tryb GUI — pomijam interaktywny dialog (użyj --no-gui).")
+            state.dialog_complete = True
+            return state
+
+        if not state.opening_message:
+            _coaching_brief_deterministic(state)
+            state.opening_message = state.opening_message or "Jak oceniasz ostatni tydzień treningowy?"
+
+        if not state.messages:
+            state.messages.append({"role": "assistant", "content": state.opening_message})
+
+        max_turns = 14
+        turn = 0
+        while not state.dialog_complete and turn < max_turns:
+            turn += 1
+            last = state.messages[-1]
+            if last.get("role") == "assistant":
+                print()
+                print(f"Coach: {last.get('content', '')}")
+                print()
+                try:
+                    user_line = input("Ty (Enter = zakończ rozmowę i przejdź do planu): ").strip()
+                except EOFError:
+                    user_line = ""
+                if not user_line:
+                    state.dialog_complete = True
+                    state.log("coach_dialog: pusty input — kończę dialog.")
+                    break
+                state.messages.append({"role": "user", "content": user_line})
+
+            reply, done = _coach_turn_llm(state)
+            if not reply and not done:
+                reply = "Dzięki za kontekst. PLAN_READY"
+                done = True
+            state.messages.append({"role": "assistant", "content": reply})
+            state.dialog_complete = bool(done)
+
+        if not state.dialog_complete:
+            state.log("coach_dialog: limit tur — wymuszam zakończenie dialogu.")
+            state.dialog_complete = True
+
+        ctx = _extract_context_llm(state)
+        _apply_extracted_context(state, ctx)
+        _save_json(DATA_DIR / "coaching_transcript.json", {"messages": state.messages, "extracted": ctx})
+    except Exception as e:
+        state.add_error(f"coach_dialog failed: {e}")
+        state.dialog_complete = True
+    return state
+
+
+def streamlit_seed_coaching_messages(state: AgentState) -> AgentState:
+    """Pierwsza wiadomość coacha w UI (po coaching_brief_node)."""
+    if not (state.opening_message or "").strip():
+        _coaching_brief_deterministic(state)
+    if not state.messages:
+        msg = (state.opening_message or "").strip() or (
+            "Opowiedz proszę, jak minął ostatni tydzień treningowy — co poszło dobrze, a co Cię zaskoczyło?"
+        )
+        state.messages.append({"role": "assistant", "content": msg})
+    return state
+
+
+def streamlit_coach_after_user(state: AgentState, user_text: str) -> Tuple[AgentState, bool]:
+    """
+    Jedna tura: wiadomość użytkownika + odpowiedź modelu.
+    Zwraca (stan, plan_ready).
+    """
+    text = (user_text or "").strip()
+    if not text:
+        return state, False
+    state.messages.append({"role": "user", "content": text})
+    reply, done = _coach_turn_llm(state)
+    if not reply and not done:
+        reply = "Dzięki za rozmowę — przechodzę do ułożenia planu."
+        done = True
+    state.messages.append({"role": "assistant", "content": reply})
+    return state, done
+
+
+def streamlit_finalize_coaching_and_plan(state: AgentState) -> AgentState:
+    """Ekstrakcja preferencji z rozmowy + generate_plan_node (deterministyczny plan + ewentualne LLM w explanation)."""
+    state.dialog_complete = True
+    ctx = _extract_context_llm(state)
+    _apply_extracted_context(state, ctx)
+    _save_json(
+        DATA_DIR / "coaching_transcript.json",
+        {"messages": state.messages, "extracted": ctx},
+    )
+    return generate_plan_node(state)
+
+
+def build_streamlit_demo_agent_state() -> AgentState:
+    """
+    Stan demonstracyjny bez Stravy — do podglądu UI i dialogu.
+    """
+    state = AgentState(mode="full", hitl_mode="streamlit", days=28)
+    state.coach_analysis = "demo"
+    state.weekly_summary = {
+        "activity_count": 16,
+        "weekly_load": 36.4,
+        "zone_counts": {"z1": 6, "z2": 5, "z3": 2, "z4": 1, "z5": 0, "unknown": 2},
+    }
+    state.four_week_summary = {
+        "avg_4w_load": 44.0,
+        "current_week_load": 22.0,
+        "weeks": [],
+    }
+    state.flags = []
+    state.hr_zones_summary = {"days": 28, "hr_max": 178}
+    state.training_summary = _build_training_summary(state)
+    # Zapis do plików — generate_training_plan czyta weekly/four_week/flags z dysku.
+    _save_json(DATA_DIR / "weekly_summary.json", state.weekly_summary)
+    _save_json(DATA_DIR / "four_week_summary.json", state.four_week_summary)
+    _save_json(DATA_DIR / "flags.json", {"flags": state.flags})
+    _save_json(DATA_DIR / "hr_zones_summary.json", state.hr_zones_summary)
+    try:
+        _coaching_brief_llm(state)
+    except Exception:
+        _coaching_brief_deterministic(state)
+    state.coaching_brief_ready = True
+    return streamlit_seed_coaching_messages(state)
+
+
 def generate_plan_node(state: AgentState) -> AgentState:
     try:
         state.log("generate_plan")
 
-        # Prosty, "ludzki" dialog o preferencjach przed pierwszym planem (tylko w CLI).
-        if state.hitl_mode == "cli" and not state.preferences_collected:
+        # Formularz preferencji CLI tylko gdy nie było coachingowego dialogu przed planem.
+        skip_prefs_form = (
+            state.dialog_complete
+            or state.preferences_collected
+            or bool(state.messages)
+        )
+        if state.hitl_mode == "cli" and not state.preferences_collected and not skip_prefs_form:
             print()
             print("Before I create your plan, a few quick questions.")
             print("(Press ENTER to keep the suggested defaults.)")
@@ -889,6 +1265,10 @@ def generate_plan_node(state: AgentState) -> AgentState:
         state.explanation = result.get("explanation", state.coach_analysis)
         state.plan_accepted = False
 
+        if state.messages:
+            state.plan_draft = _enrich_plan_explanation_with_conversation(state, state.plan_draft)
+            state.explanation = state.plan_draft.get("explanation", state.explanation)
+
         _save_json(DATA_DIR / "training_plan_current.json", state.plan_draft)
     except Exception as e:
         state.add_error(f"generate_plan failed: {e}")
@@ -961,6 +1341,16 @@ def ask_user_node(state: AgentState) -> AgentState:
             "'wolne we wtorek', 'środa jakościowa', 'w weekend mam czas', "
             "'maks 4 dni treningowe', 'max 2–3 treningi dziennie'."
         )
+
+    try:
+        from hitl_dialog import show_hitl_dialog
+    except ImportError as e:
+        state.add_error(
+            "GUI Tkinter nie jest dostępne (brak tkinter). "
+            f"Użyj --no-gui albo aplikacji Streamlit. Szczegóły: {e}"
+        )
+        state.done = True
+        return state
 
     accepted, feedback = show_hitl_dialog(
         state.plan_draft,
@@ -1198,6 +1588,19 @@ def think_node(state: AgentState) -> AgentState:
 
     if not state.coach_analysis:
         state.next_action = "analyze_training"
+        return state
+
+    if state.mode == "full" and not state.coaching_brief_ready:
+        state.next_action = "coaching_brief"
+        return state
+
+    if (
+        state.mode == "full"
+        and state.coaching_brief_ready
+        and not state.dialog_complete
+        and not state.plan_draft
+    ):
+        state.next_action = "coach_dialog"
         return state
 
     if not state.plan_draft:

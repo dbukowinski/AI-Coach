@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import ttk
 from typing import Dict, List, Tuple, Any, Optional
+
+# Tkinter dopiero w show_hitl_dialog — import modułu hitl_dialog nie ładuje _tkinter
+# (Streamlit Cloud, headless, testy).
 
 
 def _format_plan_text(plan: Dict[str, Any]) -> str:
@@ -66,6 +67,9 @@ def show_hitl_dialog(
     - czego jest za dużo / za mało,
     - które dni nie działają itd.
     """
+    import tkinter as tk
+    from tkinter import ttk
+
     result: Dict[str, Any] = {
         "accepted": False,
         "feedback": "",
