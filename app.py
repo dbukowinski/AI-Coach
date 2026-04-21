@@ -122,6 +122,35 @@ def _weekday_label(date_iso: str) -> str:
     except Exception:
         return date_iso or "—"
 
+def _get_secret(key: str) -> Optional[str]:
+    try:
+        if key in st.secrets and st.secrets[key] not in (None, ""):
+            return str(st.secrets[key]).strip()
+    except Exception:
+        pass
+    return None
+
+
+def _exchange_strava_code_for_tokens(client_id: str, client_secret: str, code: str) -> Dict[str, Any]:
+    import requests
+
+    r = requests.post(
+        "https://www.strava.com/oauth/token",
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "grant_type": "authorization_code",
+        },
+        timeout=30,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"Strava token exchange failed: {r.status_code} {r.text}")
+    data = r.json()
+    if not isinstance(data, dict):
+        raise RuntimeError("Strava token exchange returned non-JSON object")
+    return data
+
 
 def _render_plan(plan: Dict[str, Any]) -> None:
     sessions: List[Dict[str, Any]] = plan.get("sessions") or []
@@ -242,6 +271,108 @@ with st.sidebar:
             "nie zapisuje się do pliku — przy długiej przerwie możesz musieć zaktualizować "
             "`STRAVA_REFRESH_TOKEN` w Secrets."
         )
+
+    with st.expander("Połącz Stravę (automatyczny OAuth w aplikacji)"):
+        st.markdown(
+            "Ta sekcja **automatyzuje uzyskanie** `STRAVA_REFRESH_TOKEN` w przeglądarce. "
+            "Streamlit Cloud **nie pozwala zapisać** sekretów programowo, więc na końcu "
+            "dostaniesz token do wklejenia w *Settings → Secrets*."
+        )
+
+        client_id = _get_secret("STRAVA_CLIENT_ID") or (os.getenv("STRAVA_CLIENT_ID") or "").strip()
+        client_secret = _get_secret("STRAVA_CLIENT_SECRET") or (os.getenv("STRAVA_CLIENT_SECRET") or "").strip()
+        app_url = (
+            _get_secret("APP_URL")
+            or _get_secret("STREAMLIT_APP_URL")
+            or (os.getenv("APP_URL") or os.getenv("STREAMLIT_APP_URL") or "").strip()
+        )
+
+        if not client_id or not client_secret:
+            st.warning(
+                "Najpierw dodaj w Secrets: `STRAVA_CLIENT_ID` i `STRAVA_CLIENT_SECRET` "
+                "(z `https://www.strava.com/settings/api`)."
+            )
+        else:
+            if not app_url:
+                st.info(
+                    "Ustaw w Secrets `APP_URL` (pełny adres aplikacji), np. "
+                    "`https://twoja-app.streamlit.app` — użyjemy go jako `redirect_uri`."
+                )
+            else:
+                redirect_uri = app_url.rstrip("/") + "/"
+                authorize_url = (
+                    "https://www.strava.com/oauth/authorize"
+                    f"?client_id={client_id}"
+                    "&response_type=code"
+                    f"&redirect_uri={redirect_uri}"
+                    "&approval_prompt=force"
+                    "&scope=read,activity:read_all"
+                )
+                st.markdown(f"[Kliknij aby połączyć Stravę]({authorize_url})")
+                st.caption(
+                    "Po akceptacji Strava wróci do aplikacji z parametrem `code` w URL."
+                )
+
+                # Jeśli Strava wróciła z code=..., wymień na tokeny i pokaż instrukcję.
+                code = st.query_params.get("code")
+                if isinstance(code, list):
+                    code = code[0] if code else None
+                if code:
+                    try:
+                        tokens = _exchange_strava_code_for_tokens(client_id, client_secret, str(code))
+                        refresh_token = tokens.get("refresh_token", "")
+                        access_token = tokens.get("access_token", "")
+                        expires_at = tokens.get("expires_at", 0)
+                        st.success("Połączenie OK — odebrałem tokeny ze Stravy.")
+                        st.markdown("Wklej to do *Settings → Secrets* i zrób **Reboot app**:")
+                        st.code(
+                            f'STRAVA_REFRESH_TOKEN = "{refresh_token}"\n'
+                            f'STRAVA_ACCESS_TOKEN = "{access_token}"\n'
+                            f'STRAVA_EXPIRES_AT = "{expires_at}"',
+                            language="toml",
+                        )
+                        # Ułatwienie: ustaw w bieżącym procesie, żeby diagnostyka zadziałała bez rebootu.
+                        os.environ["STRAVA_REFRESH_TOKEN"] = str(refresh_token)
+                        os.environ["STRAVA_ACCESS_TOKEN"] = str(access_token)
+                        os.environ["STRAVA_EXPIRES_AT"] = str(expires_at)
+                    except Exception as e:
+                        st.error("Nie udało się wymienić `code` na tokeny.")
+                        st.code(str(e))
+
+    with st.expander("Diagnostyka Stravy (Cloud)"):
+        import os
+
+        def _mask(v: object) -> str:
+            if v is None:
+                return "brak"
+            s = str(v).strip()
+            if not s:
+                return "puste"
+            if len(s) <= 6:
+                return "***"
+            return s[:2] + "…" + s[-2:]
+
+        keys = [
+            "STRAVA_CLIENT_ID",
+            "STRAVA_CLIENT_SECRET",
+            "STRAVA_REFRESH_TOKEN",
+            "STRAVA_ACCESS_TOKEN",
+            "STRAVA_EXPIRES_AT",
+        ]
+        st.markdown("**Wykryte wartości (maskowane):**")
+        for k in keys:
+            st.write(f"- `{k}`: `{_mask(os.getenv(k))}`")
+
+        if st.button("Test: odśwież token + pobierz 1 aktywność", use_container_width=True):
+            try:
+                import sync_strava
+
+                sync_strava.ensure_valid_token()
+                acts = sync_strava.fetch_last_days(days=1, per_page=1)
+                st.success(f"OK — token działa. Pobrano {len(acts)} aktywność(‑i) z ostatniego dnia.")
+            except Exception as e:
+                st.error("Strava test nie powiódł się.")
+                st.code(str(e))
 
 # ── Nagłówek ──────────────────────────────────────────────────────────────────
 
