@@ -134,6 +134,9 @@ def refresh_tokens() -> None:
     """Refresh Strava access token using refresh_token and persist to .env."""
     global ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT
 
+    # Streamlit: jeśli tokeny pojawiły się po imporcie modułu, dociągnij je ze store.
+    _hydrate_tokens_from_local_store_if_missing()
+
     if not (CLIENT_ID and CLIENT_SECRET and REFRESH_TOKEN):
         raise RuntimeError(
             "Brakuje STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN. "
@@ -184,6 +187,7 @@ def refresh_tokens() -> None:
 
 def ensure_valid_token(buffer_seconds: int = 60) -> None:
     """Ensure access token is present and not expiring soon."""
+    _hydrate_tokens_from_local_store_if_missing()
     if (not ACCESS_TOKEN) or time.time() >= (EXPIRES_AT - buffer_seconds):
         refresh_tokens()
 

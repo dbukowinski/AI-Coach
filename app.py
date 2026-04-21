@@ -161,6 +161,22 @@ def _exchange_strava_code_for_tokens(client_id: str, client_secret: str, code: s
     return data
 
 
+def _has_strava_connection() -> bool:
+    # 1) env (z secrets lub runtime)
+    if (os.getenv("STRAVA_REFRESH_TOKEN") or "").strip():
+        return True
+    # 2) local store (data/strava_tokens.json)
+    try:
+        from strava_token_store import get_active_tokens
+
+        t = get_active_tokens()
+        if not t:
+            return False
+        return bool(str(t.get("refresh_token") or "").strip())
+    except Exception:
+        return False
+
+
 def _render_plan(plan: Dict[str, Any]) -> None:
     sessions: List[Dict[str, Any]] = plan.get("sessions") or []
     template = plan.get("template", "—")
@@ -242,6 +258,12 @@ with st.sidebar:
             if use_demo:
                 st.session_state.agent = build_streamlit_demo_agent_state()
             else:
+                if not _has_strava_connection():
+                    st.error(
+                        "Najpierw połącz Stravę: otwórz sekcję „Połącz Stravę (automatyczny OAuth…)”, "
+                        "kliknij link i zaakceptuj. Dopiero potem uruchom pipeline."
+                    )
+                    st.stop()
                 agent = AgentState(
                     days=int(days),
                     mode="full",
