@@ -12,6 +12,7 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from agent_state import AgentState
+from llm_provider import invoke_llm
 
 # Tkinter (hitl_dialog) — import leniwy w ask_user_node, żeby Streamlit Cloud / headless
 # mogły importować ten moduł bez _tkinter.
@@ -228,7 +229,7 @@ def _build_coach_analysis(
             f"{json.dumps(hr_zones_summary, ensure_ascii=False, indent=2)}\n\n"
             "Respond with plain text suitable to show to the user."
         )
-        return _call_bedrock(prompt, max_tokens=512)
+        return invoke_llm(prompt)
     except Exception:
         return _build_coach_analysis_deterministic(
             weekly_summary=weekly_summary,
@@ -647,7 +648,7 @@ def _apply_feedback_rules(plan: Dict[str, Any], feedback: str) -> Dict[str, Any]
             f"{feedback}\n\n"
             "Return the revised plan JSON now:"
         )
-        raw = _call_bedrock(prompt, max_tokens=1024)
+        raw = invoke_llm(prompt)
         # Model może owinąć JSON w markdown – spróbujmy to oczyścić.
         text = raw.strip()
         if text.startswith("```"):
@@ -878,7 +879,7 @@ def _coaching_brief_llm(state: AgentState) -> None:
         '- "hypothesis": jedno zdanie — co prawdopodobnie się dzieje\n\n'
         f"Dane:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
-    raw = _call_bedrock(prompt, max_tokens=700)
+    raw = invoke_llm(prompt)
     data = _parse_json_object(raw)
     if not data:
         raise ValueError("brief JSON parse failed")
@@ -996,11 +997,10 @@ def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
         "Napisz TERAZ kolejną wypowiedź trenera (tylko treść wypowiedzi, bez nagłówków)."
     )
     try:
-        raw = _call_bedrock(prompt, max_tokens=600)
+        raw = invoke_llm(prompt)
         visible, done = _strip_plan_ready_marker(raw)
         return visible, done
     except Exception as e:
-        # Bedrock jest opcjonalny – w razie braku credentials nie crashujemy UI.
         state.log(f"coach_turn LLM unavailable, fallback to deterministic: {e}")
         return _coach_turn_fallback_deterministic(state)
 
@@ -1023,7 +1023,7 @@ def _extract_context_llm(state: AgentState) -> Dict[str, Any]:
         f"Rozmowa:\n{conv}"
     )
     try:
-        raw = _call_bedrock(prompt, max_tokens=500)
+        raw = invoke_llm(prompt)
         data = _parse_json_object(raw)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -1067,7 +1067,7 @@ def _enrich_plan_explanation_with_conversation(state: AgentState, plan: Dict[str
         f"Obecne uzasadnienie planu:\n{plan.get('explanation', '')}"
     )
     try:
-        addon = _call_bedrock(prompt, max_tokens=400).strip()
+        addon = invoke_llm(prompt).strip()
         if addon:
             base = (plan.get("explanation") or "").strip()
             plan["explanation"] = (base + "\n\n— Komentarz trenera —\n" + addon).strip()
