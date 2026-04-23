@@ -980,21 +980,21 @@ def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
     history = _format_messages_for_prompt(state.messages)
 
     prompt = (
-        "Jesteś doświadczonym trenerem biegowym. Prowadzisz krótką rozmowę przed ułożeniem planu tygodnia.\n\n"
-        "Zasady:\n"
-        "- Masz dostęp do danych z ostatnich tygodni — cytuj je konkretnie tam gdzie ma to sens.\n"
-        "- Jedno główne pytanie na raz (możesz najpierw 1-2 zdania obserwacji lub opinii).\n"
-        "- Miej opinię — nie zbieraj danych jak formularz; reaguj na to, co już wiesz z metryk.\n"
-        "- Gdy masz wystarczający kontekst (cel, dostępność, ewentualne ograniczenia, zmęczenie/kontuzja) "
-        "i możesz ułożyć sensowny tydzień — ZAKOŃCZ swoją wypowiedź dokładnie tokenem PLAN_READY "
-        "(bez tekstu po nim).\n"
-        "- Pisz po polsku, naturalnie, krócej niż pół strony A4.\n\n"
+        "Jesteś doświadczonym trenerem biegowym rozmawiającym ze sportowcem przed ułożeniem planu tygodnia.\n\n"
+        "KLUCZOWE ZASADY:\n"
+        "- ZAWSZE najpierw odpowiedz na to, co napisał sportowiec — nigdy nie ignoruj jego słów.\n"
+        "- Jeśli pyta o sugestię, radę lub alternatywę — daj konkretną odpowiedź trenerską opartą na danych.\n"
+        "- Jeśli pyta o metodologię, fizjologię, żywienie — odpowiedz merytorycznie i krótko.\n"
+        "- Pytaj o brakujący kontekst tylko gdy naprawdę go potrzebujesz do planu (cel, dostępność, ograniczenia).\n"
+        "- Miej własną opinię — nie zbieraj danych jak formularz.\n"
+        "- Gdy masz wystarczający kontekst do planu — zakończ wypowiedź tokenem PLAN_READY (bez tekstu po nim).\n"
+        "- Pisz po polsku, naturalnie, max 3-5 zdań.\n\n"
         f"Dane treningowe (JSON):\n{summary_json}\n\n"
-        f"Zaobserwowane wzorce / briefing:\n{patterns_txt}\n\n"
+        f"Zaobserwowane wzorce:\n{patterns_txt}\n\n"
         f"Flagi ryzyka:\n{flags_txt}\n\n"
         f"Hipoteza trenera (wewn.): {state.coaching_hypothesis or '(brak)'}\n\n"
         f"Dotychczasowa rozmowa:\n{history}\n\n"
-        "Napisz TERAZ kolejną wypowiedź trenera (tylko treść wypowiedzi, bez nagłówków)."
+        "Napisz TERAZ odpowiedź trenera (reaguj na ostatnią wiadomość sportowca, bez nagłówków)."
     )
     try:
         raw = invoke_llm(prompt)
@@ -1176,27 +1176,89 @@ def streamlit_finalize_coaching_and_plan(state: AgentState) -> AgentState:
     return generate_plan_node(state)
 
 
+def _classify_intent(user_text: str) -> str:
+    """
+    Klasyfikuje intencję wiadomości użytkownika.
+    Zwraca: 'question' | 'revision' | 'chat'
+    """
+    prompt = (
+        "Sklasyfikuj wiadomość sportowca do trenera. Odpowiedz JEDNYM słowem.\n\n"
+        "Kategorie:\n"
+        "- 'question': pyta o coś merytorycznego (fizjologia, metodologia, żywienie, "
+        "kontuzje, 'dlaczego X', 'co to jest', 'jak to działa', 'co sugerujesz', "
+        "'jakie masz zdanie', 'możesz coś polecić')\n"
+        "- 'revision': chce zmienić plan (dni, godziny, intensywność, 'zmień', "
+        "'dodaj', 'usuń', 'wolne w', 'mniej', 'więcej', konkretne dni tygodnia)\n"
+        "- 'chat': ogólna rozmowa, podziękowanie, potwierdzenie\n\n"
+        f"Wiadomość: \"{user_text}\"\n\n"
+        "Odpowiedź (tylko jedno słowo: question / revision / chat):"
+    )
+    try:
+        result = invoke_llm(prompt, temperature=0.0).strip().lower()
+        if result in ("question", "revision", "chat"):
+            return result
+        if any(w in result for w in ("question", "pytanie", "pyta")):
+            return "question"
+        if any(w in result for w in ("revision", "zmiana", "zmień")):
+            return "revision"
+        return "chat"
+    except Exception:
+        # fallback: heurystyka na znaku zapytania
+        return "question" if "?" in user_text else "revision"
+
+
+def _answer_question_llm(state: AgentState, user_text: str) -> str:
+    """
+    Odpowiada na pytanie merytoryczne sportowca w kontekście jego planu i danych.
+    """
+    plan_summary = json.dumps(
+        {
+            "template": state.plan_draft.get("template"),
+            "sessions_count": len(state.plan_draft.get("sessions", [])),
+            "explanation": state.plan_draft.get("explanation", "")[:300],
+        },
+        ensure_ascii=False,
+    )
+    history = _format_messages_for_prompt(state.messages[-10:])
+    prompt = (
+        "Jesteś doświadczonym trenerem biegowym. Sportowiec zadał Ci pytanie po wygenerowaniu planu tygodniowego.\n\n"
+        "Odpowiedz merytorycznie i konkretnie — jak prawdziwy trener, nie jak chatbot.\n"
+        "Możesz nawiązać do jego danych lub planu jeśli to pomaga.\n"
+        "Pisz po polsku, max 4-5 zdań.\n\n"
+        f"Aktualny plan (skrót):\n{plan_summary}\n\n"
+        f"Dane treningowe:\nweekly_load={state.weekly_summary.get('weekly_load')}, "
+        f"avg_4w={state.four_week_summary.get('avg_4w_load')}, flagi={state.flags}\n\n"
+        f"Historia rozmowy:\n{history}\n\n"
+        f"Pytanie sportowca: {user_text}\n\n"
+        "Odpowiedź trenera:"
+    )
+    try:
+        return invoke_llm(prompt, temperature=0.7).strip()
+    except Exception:
+        return "Świetne pytanie — odpowiem Ci na to przy następnym treningu. Co jeszcze chcesz dopracować w planie?"
+
+
 def streamlit_revise_plan_after_user(state: AgentState, user_text: str) -> AgentState:
     """
-    Kontynuacja dialogu PO wygenerowaniu planu: traktujemy wiadomość jako feedback
-    i przepuszczamy przez `revise_plan_node`, a następnie dopisujemy odpowiedź coacha
-    do `state.messages` (żeby UI miało ciągłą historię).
+    Kontynuacja dialogu PO wygenerowaniu planu.
+    Klasyfikuje intent: pytanie → odpowiada merytorycznie, rewizja → modyfikuje plan.
     """
     text = (user_text or "").strip()
     if not text:
         return state
 
-    # user mówi w czacie
     state.messages.append({"role": "user", "content": text})
 
-    # rewizja planu (deterministycznie lub przez Bedrock, zależnie od dostępności)
-    state.user_feedback = text
-    state = revise_plan_node(state)
+    intent = _classify_intent(text)
 
-    # odpowiedź coacha do UI
-    reply = (state.coach_question or "").strip() or "Zaktualizowałem plan. Co jeszcze dopracować?"
+    if intent in ("question", "chat"):
+        reply = _answer_question_llm(state, text)
+    else:
+        state.user_feedback = text
+        state = revise_plan_node(state)
+        reply = (state.coach_question or "").strip() or "Zaktualizowałem plan. Co jeszcze dopracować?"
+
     state.messages.append({"role": "assistant", "content": reply})
-
     return state
 
 def build_streamlit_demo_agent_state() -> AgentState:
