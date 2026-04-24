@@ -50,40 +50,34 @@ def _get_bedrock_client():
     return boto3.client("bedrock-runtime", region_name=region)
 
 
-def _call_bedrock(prompt: str, max_tokens: int = 512) -> str:
+def _call_bedrock(prompt: str, max_tokens: int = 512, system_prompt: str = "") -> str:
     """
-    Proste wywołanie modelu tekstowego w Amazon Bedrock (Anthropic Claude).
-    Oczekuje odpowiedzi w polu 'content[0].text'.
+    Wywołanie Claude przez Amazon Bedrock (Messages API).
+    Opcjonalny system_prompt jest przekazywany jako pole 'system'.
     """
     model_id = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v1:0")
     client = _get_bedrock_client()
 
-    body = {
-        "modelId": model_id,
-        "inputText": prompt,
-        "textGenerationConfig": {
-            "maxTokenCount": max_tokens,
-            "temperature": 0.3,
-            "topP": 0.9,
-        },
+    body: Dict[str, Any] = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": max_tokens,
+        "temperature": 0.3,
+        "top_p": 0.9,
+        "messages": [{"role": "user", "content": prompt}],
     }
+    if system_prompt:
+        body["system"] = system_prompt
 
     try:
         response = client.invoke_model(
             body=json.dumps(body),
             modelId=model_id,
+            contentType="application/json",
+            accept="application/json",
         )
-        payload = json.loads(response.get("body").read())
-        # Obsługa formatu z Text Generation (deprecated) i nowszych – defensywnie.
-        if "outputText" in payload:
-            return str(payload["outputText"])
-        if "output" in payload and isinstance(payload["output"], dict):
-            texts = payload["output"].get("texts") or []
-            if texts:
-                return str(texts[0].get("text", ""))
-        return str(payload)
+        payload = json.loads(response["body"].read())
+        return payload["content"][0]["text"]
     except (BotoCoreError, ClientError, KeyError, json.JSONDecodeError, AttributeError) as e:
-        # LLM ma być dodatkiem – w razie błędu wolimy wrócić do deterministycznej logiki.
         print(f"[Agent] Bedrock call failed, falling back to deterministic logic: {e}")
         raise
 
@@ -214,21 +208,26 @@ def _build_coach_analysis(
     W razie problemów wraca do wersji deterministycznej.
     """
     try:
-        prompt = (
-            "You are an experienced running coach. "
-            "Based on the JSON metrics below, write a short, structured analysis in English "
-            "with 3–6 bullet points and 1–2 concrete recommendations for the next week.\n\n"
-            "Weekly summary JSON:\n"
-            f"{json.dumps(weekly_summary, ensure_ascii=False, indent=2)}\n\n"
-            "Four-week summary JSON:\n"
-            f"{json.dumps(four_week_summary, ensure_ascii=False, indent=2)}\n\n"
-            "Flags list:\n"
-            f"{json.dumps(flags, ensure_ascii=False)}\n\n"
-            "HR zones summary JSON:\n"
-            f"{json.dumps(hr_zones_summary, ensure_ascii=False, indent=2)}\n\n"
-            "Respond with plain text suitable to show to the user."
+        system_prompt = (
+            "Jesteś doświadczonym trenerem biegowym. Analizujesz dane treningowe i piszesz "
+            "krótką, konkretną interpretację po polsku. Styl: bezpośredni, coachingowy — "
+            "nie streszczaj surowych liczb, interpretuj ich znaczenie dla sportowca."
         )
-        return _call_bedrock(prompt, max_tokens=512)
+        user_prompt = (
+            "Na podstawie poniższych metryk napisz analizę treningową zawierającą:\n"
+            "• 3–5 punktorów (każdy to konkretna obserwacja lub wniosek — nie powtarzaj liczb bez interpretacji)\n"
+            "• 1–2 zalecenia na kolejny tydzień\n\n"
+            "Dane tygodniowe:\n"
+            f"{json.dumps(weekly_summary, ensure_ascii=False, indent=2)}\n\n"
+            "Dane z ostatnich 4 tygodni:\n"
+            f"{json.dumps(four_week_summary, ensure_ascii=False, indent=2)}\n\n"
+            "Flagi ryzyka:\n"
+            f"{json.dumps(flags, ensure_ascii=False)}\n\n"
+            "Strefy tętna:\n"
+            f"{json.dumps(hr_zones_summary, ensure_ascii=False, indent=2)}\n\n"
+            "Odpowiedź to czysty tekst gotowy do pokazania sportowcowi."
+        )
+        return _call_bedrock(user_prompt, max_tokens=512, system_prompt=system_prompt)
     except Exception:
         return _build_coach_analysis_deterministic(
             weekly_summary=weekly_summary,
@@ -629,25 +628,23 @@ def _apply_feedback_rules(plan: Dict[str, Any], feedback: str) -> Dict[str, Any]
         return plan
 
     try:
-        instruction = (
-            "You are a running coach assistant. "
-            "The user gave natural-language feedback about the training plan. "
-            "Update the JSON plan so that it respects the feedback as much as reasonable "
-            "without making the total load clearly dangerous.\n\n"
-            "IMPORTANT:\n"
-            "- Respond with VALID JSON only.\n"
-            "- Keep the same overall structure and keys.\n"
-            "- Do not add commentary outside of JSON.\n"
+        system_prompt = (
+            "Jesteś asystentem trenera biegowego. Modyfikujesz plan treningowy w formacie JSON "
+            "zgodnie z feedbackiem sportowca. Zwracasz WYŁĄCZNIE poprawny JSON — zero komentarzy poza nim.\n\n"
+            "Zasady:\n"
+            "• Zachowaj oryginalną strukturę i wszystkie klucze JSON.\n"
+            "• Uwzględnij feedback rozsądnie — nie dopuść do niebezpiecznego przeciążenia.\n"
+            "• Jeśli prośba jest niejasna, wprowadź minimalną, bezpieczną zmianę."
         )
-        prompt = (
-            f"{instruction}\n\n"
-            "Original plan JSON:\n"
+        user_prompt = (
+            "Zmodyfikuj plan treningowy zgodnie z poniższym feedbackiem.\n\n"
+            "Oryginalny plan (JSON):\n"
             f"{json.dumps(plan, ensure_ascii=False, indent=2)}\n\n"
-            "User feedback (any language):\n"
+            "Feedback sportowca:\n"
             f"{feedback}\n\n"
-            "Return the revised plan JSON now:"
+            "Zwróć poprawiony plan jako JSON:"
         )
-        raw = _call_bedrock(prompt, max_tokens=1024)
+        raw = _call_bedrock(user_prompt, max_tokens=1024, system_prompt=system_prompt)
         # Model może owinąć JSON w markdown – spróbujmy to oczyścić.
         text = raw.strip()
         if text.startswith("```"):
@@ -868,17 +865,26 @@ def _coaching_brief_deterministic(state: AgentState) -> None:
 
 def _coaching_brief_llm(state: AgentState) -> None:
     payload = _build_training_summary(state)
-    prompt = (
-        "Jesteś doświadczonym trenerem biegowym. Przeanalizuj poniższe metryki (JSON) "
-        "i przygotuj KRÓTKI briefing dla siebie (nie kopiuj surowych liczb do usera — interpretuj).\n\n"
-        "Zwróć WYŁĄCZNIE poprawny JSON (bez markdown) o kluczach:\n"
-        '- "observations": tablica 2-3 krótkich obserwacji po polsku (konkret, coachingowy ton)\n'
-        '- "opening_question": jedno pierwsze zdanie do sportowca po polsku — zaczyna od danych/wzorca, '
-        "nie od suchych pytań typu 'ile dni trenujesz'\n"
-        '- "hypothesis": jedno zdanie — co prawdopodobnie się dzieje\n\n'
-        f"Dane:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    system_prompt = (
+        "Jesteś doświadczonym trenerem biegowym przygotowującym się do rozmowy z zawodnikiem "
+        "przed ułożeniem planu tygodnia. Odpowiadasz wyłącznie w formacie JSON, po polsku."
     )
-    raw = _call_bedrock(prompt, max_tokens=700)
+    user_prompt = (
+        "Przeanalizuj poniższe dane treningowe i przygotuj briefing.\n"
+        "Nie kopiuj surowych liczb — wyciągaj wnioski i interpretuj wzorce.\n\n"
+        "Zwróć WYŁĄCZNIE poprawny JSON bez markdown, dokładnie w tej strukturze:\n"
+        "{\n"
+        '  "observations": ["obserwacja 1", "obserwacja 2"],\n'
+        '  "opening_question": "pierwsze zdanie do sportowca",\n'
+        '  "hypothesis": "jedno zdanie o tym, co prawdopodobnie się dzieje"\n'
+        "}\n\n"
+        "Wymagania:\n"
+        '• "observations": 2–3 konkretne obserwacje w tonie coachingowym\n'
+        '• "opening_question": zacznij od wzorca z danych, nie od pytania ogólnego (np. "ile dni trenujesz")\n'
+        '• "hypothesis": krótka hipoteza o sytuacji sportowca (zmęczenie, lżejszy tydzień, dobra forma itp.)\n\n'
+        f"Dane treningowe:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+    raw = _call_bedrock(user_prompt, max_tokens=700, system_prompt=system_prompt)
     data = _parse_json_object(raw)
     if not data:
         raise ValueError("brief JSON parse failed")
@@ -974,56 +980,66 @@ def _coach_turn_fallback_deterministic(state: AgentState) -> Tuple[str, bool]:
 
 def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
     summary_json = json.dumps(state.training_summary, ensure_ascii=False, indent=2)
-    patterns_txt = "\n".join(f"- {p}" for p in state.patterns) or "- (brak)"
-    flags_txt = "\n".join(f"- {f}" for f in (state.flags or [])) or "- (brak)"
+    patterns_txt = "\n".join(f"• {p}" for p in state.patterns) or "• (brak)"
+    flags_txt = "\n".join(f"• {f}" for f in (state.flags or [])) or "• (brak)"
     history = _format_messages_for_prompt(state.messages)
 
-    prompt = (
-        "Jesteś doświadczonym trenerem biegowym. Prowadzisz krótką rozmowę przed ułożeniem planu tygodnia.\n\n"
+    system_prompt = (
+        "Jesteś doświadczonym trenerem biegowym prowadzącym krótką rozmowę przed ułożeniem "
+        "planu tygodniowego dla zawodnika.\n\n"
         "Zasady:\n"
-        "- Masz dostęp do danych z ostatnich tygodni — cytuj je konkretnie tam gdzie ma to sens.\n"
-        "- Jedno główne pytanie na raz (możesz najpierw 1-2 zdania obserwacji lub opinii).\n"
-        "- Miej opinię — nie zbieraj danych jak formularz; reaguj na to, co już wiesz z metryk.\n"
-        "- Gdy masz wystarczający kontekst (cel, dostępność, ewentualne ograniczenia, zmęczenie/kontuzja) "
-        "i możesz ułożyć sensowny tydzień — ZAKOŃCZ swoją wypowiedź dokładnie tokenem PLAN_READY "
-        "(bez tekstu po nim).\n"
-        "- Pisz po polsku, naturalnie, krócej niż pół strony A4.\n\n"
+        "• Cytuj konkretne dane, gdy wzmacniają Twoją obserwację.\n"
+        "• Zadawaj jedno pytanie na raz — poprzedź je krótką obserwacją lub opinią.\n"
+        "• Miej zdanie; nie zbieraj odpowiedzi jak formularz.\n"
+        "• Gdy wiesz już wystarczająco dużo (cel sportowca, dostępność dni w tygodniu, "
+        "ewentualne zmęczenie lub kontuzja) — zakończ wypowiedź tokenem PLAN_READY "
+        "(samodzielnie, bez żadnego tekstu po nim).\n"
+        "• Pisz po polsku, naturalnie. Maksymalnie kilka zdań + jedno pytanie lub zamknięcie."
+    )
+    user_prompt = (
         f"Dane treningowe (JSON):\n{summary_json}\n\n"
-        f"Zaobserwowane wzorce / briefing:\n{patterns_txt}\n\n"
+        f"Wzorce z analizy:\n{patterns_txt}\n\n"
         f"Flagi ryzyka:\n{flags_txt}\n\n"
-        f"Hipoteza trenera (wewn.): {state.coaching_hypothesis or '(brak)'}\n\n"
-        f"Dotychczasowa rozmowa:\n{history}\n\n"
-        "Napisz TERAZ kolejną wypowiedź trenera (tylko treść wypowiedzi, bez nagłówków)."
+        f"Hipoteza (wewnętrzna): {state.coaching_hypothesis or '(brak)'}\n\n"
+        f"Rozmowa do tej pory:\n{history or '(brak — to pierwsze słowo trenera)'}\n\n"
+        "Napisz kolejną wypowiedź trenera. Tylko treść — bez nagłówków ani etykiet."
     )
     try:
-        raw = _call_bedrock(prompt, max_tokens=600)
+        raw = _call_bedrock(user_prompt, max_tokens=600, system_prompt=system_prompt)
         visible, done = _strip_plan_ready_marker(raw)
         return visible, done
     except Exception as e:
-        # Bedrock jest opcjonalny – w razie braku credentials nie crashujemy UI.
         state.log(f"coach_turn LLM unavailable, fallback to deterministic: {e}")
         return _coach_turn_fallback_deterministic(state)
 
 
 def _extract_context_llm(state: AgentState) -> Dict[str, Any]:
     conv = _format_messages_for_prompt(state.messages)
-    prompt = (
-        "Z rozmowy trener–sportowiec wyciągnij preferencje do planowania tygodnia.\n"
-        "Zwróć WYŁĄCZNIE JSON (bez markdown) z opcjonalnymi polami:\n"
+    system_prompt = (
+        "Jesteś ekstraherem preferencji treningowych. Na podstawie rozmowy trener–sportowiec "
+        "wyciągasz dane do planowania tygodnia i zwracasz wyłącznie JSON — zero komentarzy poza nim."
+    )
+    user_prompt = (
+        "Z poniższej rozmowy wyciągnij preferencje treningowe sportowca.\n\n"
+        "Zwróć WYŁĄCZNIE poprawny JSON bez markdown, w tej strukturze:\n"
         "{\n"
         '  "max_weekly_minutes": number | null,\n'
-        '  "days_off": ["monday","tuesday",...] | [],\n'
-        '  "preferred_quality_days": ["wednesday",...] | [],\n'
+        '  "days_off": ["monday", "tuesday", ...] | [],\n'
+        '  "preferred_quality_days": ["wednesday", ...] | [],\n'
         '  "weekend_focus": true | false,\n'
         '  "max_training_days": number | null,\n'
         '  "max_sessions_per_day": 1 | 2 | 3 | null,\n'
-        '  "goal_summary": string | ""\n'
-        "}\n"
-        "Używaj angielskich nazw dni tygodnia (monday..sunday). Jeśli czegoś nie było — null lub [].\n\n"
+        '  "goal_summary": "krótki opis celu" | ""\n'
+        "}\n\n"
+        "Zasady:\n"
+        "• Nazwy dni ZAWSZE po angielsku: monday, tuesday, wednesday, thursday, friday, saturday, sunday.\n"
+        "• Jeśli pole nie padło w rozmowie — wstaw null lub [].\n"
+        "• Przykład: sportowiec mówi 'wolna środa' → days_off: [\"wednesday\"].\n"
+        "• Przykład: 'cel: półmaraton w maju' → goal_summary: \"półmaraton w maju\".\n\n"
         f"Rozmowa:\n{conv}"
     )
     try:
-        raw = _call_bedrock(prompt, max_tokens=500)
+        raw = _call_bedrock(user_prompt, max_tokens=500, system_prompt=system_prompt)
         data = _parse_json_object(raw)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -1059,15 +1075,20 @@ def _apply_extracted_context(state: AgentState, ctx: Dict[str, Any]) -> None:
 def _enrich_plan_explanation_with_conversation(state: AgentState, plan: Dict[str, Any]) -> Dict[str, Any]:
     conv = _format_messages_for_prompt(state.messages)
     summary_json = json.dumps(state.training_summary, ensure_ascii=False, indent=2)
-    prompt = (
-        "Jesteś trenerem biegowym. Na podstawie danych treningowych i rozmowy dopisz krótki komentarz "
-        "do planu (2-5 zdań po polsku): co jest najważniejsze w tym tygodniu i jak rozmowa to uzasadnia.\n"
-        "Odpowiedz WYŁĄCZNIE plain text, bez JSON.\n\n"
-        f"Dane:\n{summary_json}\n\nRozmowa:\n{conv}\n\n"
-        f"Obecne uzasadnienie planu:\n{plan.get('explanation', '')}"
+    system_prompt = (
+        "Jesteś doświadczonym trenerem biegowym. Piszesz krótkie, konkretne uzasadnienia "
+        "planów treningowych po polsku. Styl: bezpośredni, motywujący — bez ogólników."
+    )
+    user_prompt = (
+        "Na podstawie danych treningowych i rozmowy z zawodnikiem dopisz krótki komentarz do planu.\n"
+        "Komentarz (2–5 zdań po polsku): co jest najważniejsze w tym tygodniu i jak rozmowa to uzasadnia.\n"
+        "Odpowiedź WYŁĄCZNIE plain text — bez JSON, nagłówków ani list.\n\n"
+        f"Dane treningowe:\n{summary_json}\n\n"
+        f"Rozmowa z zawodnikiem:\n{conv}\n\n"
+        f"Obecne uzasadnienie planu:\n{plan.get('explanation', '(brak)')}"
     )
     try:
-        addon = _call_bedrock(prompt, max_tokens=400).strip()
+        addon = _call_bedrock(user_prompt, max_tokens=400, system_prompt=system_prompt).strip()
         if addon:
             base = (plan.get("explanation") or "").strip()
             plan["explanation"] = (base + "\n\n— Komentarz trenera —\n" + addon).strip()
