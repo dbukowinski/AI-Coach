@@ -1,5 +1,5 @@
 langgraph
 requests
 python-dotenv
-boto3
+groq
 streamlit

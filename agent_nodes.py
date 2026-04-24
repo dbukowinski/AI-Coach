@@ -8,8 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError
+from groq import Groq
 
 from agent_state import AgentState
 
@@ -41,44 +40,30 @@ def _safe_call(module_name: str, candidate_functions: List[str], *args, **kwargs
     )
 
 
-def _get_bedrock_client():
+def _call_llm(user_prompt: str, max_tokens: int = 512, system_prompt: str = "") -> str:
     """
-    Tworzy klienta Bedrock Runtime.
-    Region i model są pobierane z env (opcjonalnie).
+    Wywołanie modelu przez Groq API (OpenAI-compatible chat completions).
+    GROQ_API_KEY i GROQ_MODEL_ID pobierane z env.
     """
-    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "eu-central-1"
-    return boto3.client("bedrock-runtime", region_name=region)
+    model = os.getenv("GROQ_MODEL_ID", "llama-3.3-70b-versatile")
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-
-def _call_bedrock(prompt: str, max_tokens: int = 512, system_prompt: str = "") -> str:
-    """
-    Wywołanie Claude przez Amazon Bedrock (Messages API).
-    Opcjonalny system_prompt jest przekazywany jako pole 'system'.
-    """
-    model_id = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v1:0")
-    client = _get_bedrock_client()
-
-    body: Dict[str, Any] = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-        "top_p": 0.9,
-        "messages": [{"role": "user", "content": prompt}],
-    }
+    messages: List[Dict[str, str]] = []
     if system_prompt:
-        body["system"] = system_prompt
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_prompt})
 
     try:
-        response = client.invoke_model(
-            body=json.dumps(body),
-            modelId=model_id,
-            contentType="application/json",
-            accept="application/json",
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=max_tokens,
+            top_p=0.9,
         )
-        payload = json.loads(response["body"].read())
-        return payload["content"][0]["text"]
-    except (BotoCoreError, ClientError, KeyError, json.JSONDecodeError, AttributeError) as e:
-        print(f"[Agent] Bedrock call failed, falling back to deterministic logic: {e}")
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"[Agent] Groq call failed, falling back to deterministic logic: {e}")
         raise
 
 
@@ -227,7 +212,7 @@ def _build_coach_analysis(
             f"{json.dumps(hr_zones_summary, ensure_ascii=False, indent=2)}\n\n"
             "Odpowiedź to czysty tekst gotowy do pokazania sportowcowi."
         )
-        return _call_bedrock(user_prompt, max_tokens=512, system_prompt=system_prompt)
+        return _call_llm(user_prompt, max_tokens=512, system_prompt=system_prompt)
     except Exception:
         return _build_coach_analysis_deterministic(
             weekly_summary=weekly_summary,
@@ -644,7 +629,7 @@ def _apply_feedback_rules(plan: Dict[str, Any], feedback: str) -> Dict[str, Any]
             f"{feedback}\n\n"
             "Zwróć poprawiony plan jako JSON:"
         )
-        raw = _call_bedrock(user_prompt, max_tokens=1024, system_prompt=system_prompt)
+        raw = _call_llm(user_prompt, max_tokens=1024, system_prompt=system_prompt)
         # Model może owinąć JSON w markdown – spróbujmy to oczyścić.
         text = raw.strip()
         if text.startswith("```"):
@@ -884,7 +869,7 @@ def _coaching_brief_llm(state: AgentState) -> None:
         '• "hypothesis": krótka hipoteza o sytuacji sportowca (zmęczenie, lżejszy tydzień, dobra forma itp.)\n\n'
         f"Dane treningowe:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
-    raw = _call_bedrock(user_prompt, max_tokens=700, system_prompt=system_prompt)
+    raw = _call_llm(user_prompt, max_tokens=700, system_prompt=system_prompt)
     data = _parse_json_object(raw)
     if not data:
         raise ValueError("brief JSON parse failed")
@@ -1005,7 +990,7 @@ def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
         "Napisz kolejną wypowiedź trenera. Tylko treść — bez nagłówków ani etykiet."
     )
     try:
-        raw = _call_bedrock(user_prompt, max_tokens=600, system_prompt=system_prompt)
+        raw = _call_llm(user_prompt, max_tokens=600, system_prompt=system_prompt)
         visible, done = _strip_plan_ready_marker(raw)
         return visible, done
     except Exception as e:
@@ -1039,7 +1024,7 @@ def _extract_context_llm(state: AgentState) -> Dict[str, Any]:
         f"Rozmowa:\n{conv}"
     )
     try:
-        raw = _call_bedrock(user_prompt, max_tokens=500, system_prompt=system_prompt)
+        raw = _call_llm(user_prompt, max_tokens=500, system_prompt=system_prompt)
         data = _parse_json_object(raw)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -1088,7 +1073,7 @@ def _enrich_plan_explanation_with_conversation(state: AgentState, plan: Dict[str
         f"Obecne uzasadnienie planu:\n{plan.get('explanation', '(brak)')}"
     )
     try:
-        addon = _call_bedrock(user_prompt, max_tokens=400, system_prompt=system_prompt).strip()
+        addon = _call_llm(user_prompt, max_tokens=400, system_prompt=system_prompt).strip()
         if addon:
             base = (plan.get("explanation") or "").strip()
             plan["explanation"] = (base + "\n\n— Komentarz trenera —\n" + addon).strip()
