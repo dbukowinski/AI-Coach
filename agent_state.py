@@ -81,6 +81,13 @@ class AgentState:
     max_loops: int = 12
     done: bool = False
 
+    # intent classification
+    user_message: str = ""
+    intent: Optional[str] = None
+    subtype: Optional[str] = None
+    discipline: Optional[str] = None
+    intent_confidence: float = 0.0
+
     # diagnostics
     errors: List[str] = field(default_factory=list)
     logs: List[str] = field(default_factory=list)
