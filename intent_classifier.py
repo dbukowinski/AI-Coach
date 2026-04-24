@@ -177,6 +177,15 @@ User: "kiedy używać kijków?"
 {"intent": "GEAR", "subtype": "GEAR_POLES", "confidence": 0.93, "discipline": "trail"}"""
 
 
+# ─── Answer-first global rule ────────────────────────────────────────────────
+
+ANSWER_FIRST_RULE = (
+    "[ZASADA GLOBALNA]\n"
+    "Najpierw odpowiedz. Potem — jeśli musisz — zadaj jedno pytanie.\n"
+    "Nigdy nie zamieniaj odpowiedzi na pytanie o samopoczucie.\n"
+    "Dane ze Stravy to kontekst do personalizacji, nie powód do opóźnienia odpowiedzi.\n"
+)
+
 # ─── LLM helpers ─────────────────────────────────────────────────────────────
 
 def _call_llm(user_prompt: str, system_prompt: str = "", max_tokens: int = 150) -> str:
@@ -316,11 +325,15 @@ def handle_question_node(state: AgentState) -> AgentState:
     message = state.user_message or state.user_feedback
 
     system_prompt = (
-        "Jesteś ekspertem w bieganiu. Odpowiadasz na pytania treningowe krótko i faktycznie.\n"
+        ANSWER_FIRST_RULE
+        + "Jesteś ekspertem w bieganiu. Odpowiadasz na pytania treningowe krótko i faktycznie.\n"
+        "Użytkownik zadał pytanie merytoryczne.\n"
         "Zasady:\n"
-        "- Maksymalnie 4 zdania\n"
-        "- Nie modyfikuj ani nie wspominaj o zmianie planu treningowego\n"
-        "- Odpowiedź po polsku\n"
+        "- Odpowiedz w max 4 zdaniach. Nie pytaj o nic przed odpowiedzią.\n"
+        "- Nie modyfikuj ani nie wspominaj o zmianie planu treningowego.\n"
+        "- Nie sprawdzaj obciążenia treningowego ani samopoczucia przed odpowiedzią.\n"
+        "- Jeśli pytanie dotyczy dyscypliny której nie znasz — odpowiedz ogólnie.\n"
+        "- Odpowiedź po polsku.\n"
         f"- Kontekst pytania: {state.subtype}\n"
         f"- Dyscyplina: {state.discipline or 'both'}"
     )
@@ -347,8 +360,10 @@ def handle_training_plan_node(state: AgentState) -> AgentState:
             )[:400]
 
         system_prompt = (
-            "Jesteś trenerem biegowym. Wyjaśniasz konkretną sesję lub element planu treningowego.\n"
-            "Odpowiedz po polsku, max 4 zdania. Nie modyfikuj planu."
+            ANSWER_FIRST_RULE
+            + "Jesteś trenerem biegowym. Wyjaśniasz konkretną sesję lub element planu treningowego.\n"
+            "Odpowiedz po polsku, max 4 zdania. Nie modyfikuj planu.\n"
+            "Nie pytaj o zmęczenie ani obciążenie przed wyjaśnieniem."
         )
         response = _safe_call_llm(
             message + plan_snippet, system_prompt=system_prompt, max_tokens=300, state=state
@@ -370,9 +385,12 @@ def handle_route_node(state: AgentState) -> AgentState:
     message = state.user_message or state.user_feedback
 
     system_prompt = (
-        "Jesteś ekspertem w planowaniu tras biegowych. Odpowiadasz po polsku.\n"
+        ANSWER_FIRST_RULE
+        + "Jesteś ekspertem w planowaniu tras biegowych. Odpowiadasz po polsku.\n"
         f"Typ zapytania: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
-        "Jeśli brakuje lokalizacji, zapytaj o nią."
+        "Jeśli lokalizacja jest podana — zasugeruj trasy od razu.\n"
+        "Jeśli brakuje lokalizacji — zapytaj TYLKO o lokalizację, nic więcej.\n"
+        "Nie pytaj o samopoczucie ani stan zdrowia."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=350, state=state)
@@ -389,8 +407,10 @@ def handle_nutrition_node(state: AgentState) -> AgentState:
     message = state.user_message or state.user_feedback
 
     system_prompt = (
-        "Jesteś ekspertem w żywieniu sportowym dla biegaczy. Odpowiadasz po polsku.\n"
-        f"Kontekst: {state.subtype}. Dyscyplina: {state.discipline or 'both'}."
+        ANSWER_FIRST_RULE
+        + "Jesteś ekspertem w żywieniu sportowym dla biegaczy. Odpowiadasz po polsku.\n"
+        f"Kontekst: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        "Odpowiedz bezpośrednio na pytanie. Nie wspominaj o obciążeniu treningowym ani zmęczeniu."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=350, state=state)
@@ -407,8 +427,11 @@ def handle_race_node(state: AgentState) -> AgentState:
     message = state.user_message or state.user_feedback
 
     system_prompt = (
-        "Jesteś ekspertem w przygotowaniach startowych i strategii wyścigowej. Odpowiadasz po polsku.\n"
-        f"Kontekst: {state.subtype}. Dyscyplina: {state.discipline or 'both'}."
+        ANSWER_FIRST_RULE
+        + "Jesteś ekspertem w przygotowaniach startowych i strategii wyścigowej. Odpowiadasz po polsku.\n"
+        f"Kontekst: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        "Odpowiedz bezpośrednio. Nie pytaj o zdrowie ani samopoczucie przed odpowiedzią.\n"
+        "Jeśli brakuje daty startu — zapytaj TYLKO o datę startu, nic więcej."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=350, state=state)
@@ -421,25 +444,39 @@ def handle_race_node(state: AgentState) -> AgentState:
 
 
 def handle_context_info_node(state: AgentState) -> AgentState:
-    """Save context to state, ask user what they want to do about it."""
+    """Acknowledge what user shared, ask ONE question about what to do. Never auto-generate plan."""
     state.log(f"handle_context_info subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
     key = (state.subtype or "info").lower()
     state.extracted_context[key] = message
 
-    responses = {
-        "INJURY": "Rozumiem — zanotowałem uraz. Czy chcesz, żebym dostosował plan treningowy do tej sytuacji?",
-        "ILLNESS": "Rozumiem — byłeś/aś chory/a. Czy chcesz zmodyfikować plan z uwzględnieniem czasu rekonwalescencji?",
-        "FATIGUE": "Rozumiem — czujesz zmęczenie. Czy chcesz, żebym złagodził intensywność na najbliższe dni?",
-        "LIFE_EVENT": "Zanotowałem zmianę w Twoich planach. Co chcesz zrobić z planem treningowym?",
-        "WEATHER": "Rozumiem — warunki pogodowe mogą wpłynąć na trening. Czy chcesz dostosować plan?",
-        "PERSONAL_RECORD": "Gratulacje! Świetny wynik! Czy chcesz zaktualizować strefy treningowe na podstawie nowego rekordu?",
-    }
-    response = responses.get(state.subtype or "", "Zapisałem tę informację. Co chcesz teraz zrobić?")
+    system_prompt = (
+        "[ZASADA GLOBALNA]\n"
+        "Odpowiedz dokładnie w dwóch zdaniach:\n"
+        "1. Zacznij od 'Rozumiem' i sparafrazuj krótko co napisał użytkownik.\n"
+        "2. Zadaj JEDNO pytanie: co użytkownik chce zrobić z planem treningowym "
+        "(np. przesunąć trening, zmodyfikować plan, dostosować intensywność).\n"
+        "Nie generuj planu. Nie sugeruj zmian samodzielnie. Tylko potwierdź i zapytaj o intencję.\n"
+        "Odpowiedź po polsku."
+    )
+    response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=150, state=state)
+
+    if not response:
+        fallback_responses = {
+            "INJURY": "Rozumiem — zanotowałem uraz. Co chcesz z tym zrobić — przesunąć trening czy zmodyfikować plan?",
+            "ILLNESS": "Rozumiem — byłeś/aś chory/a. Co chcesz z tym zrobić — przesunąć trening czy zmodyfikować plan?",
+            "FATIGUE": "Rozumiem — czujesz zmęczenie. Co chcesz z tym zrobić — złagodzić intensywność czy przesunąć trening?",
+            "LIFE_EVENT": "Zanotowałem zmianę w Twoich planach. Co chcesz z tym zrobić — przesunąć trening czy dostosować plan?",
+            "WEATHER": "Rozumiem — warunki pogodowe wpłyną na trening. Co chcesz z tym zrobić — dostosować plan czy zmienić trasę?",
+            "PERSONAL_RECORD": "Rozumiem — osiągnąłeś/aś nowy rekord, gratulacje! Czy chcesz zaktualizować strefy treningowe na tej podstawie?",
+        }
+        response = fallback_responses.get(
+            state.subtype or "", "Rozumiem. Co chcesz teraz zrobić z planem treningowym?"
+        )
 
     _append_response(state, response)
-    state.user_feedback = ""
+    state.user_feedback = ""  # CRITICAL: do NOT auto-generate plan
     return state
 
 
@@ -448,8 +485,12 @@ def handle_gear_node(state: AgentState) -> AgentState:
     message = state.user_message or state.user_feedback
 
     system_prompt = (
-        "Jesteś ekspertem w sprzęcie biegowym. Odpowiadasz po polsku, konkretnie i praktycznie.\n"
-        f"Typ pytania: {state.subtype}. Dyscyplina: {state.discipline or 'both'}."
+        ANSWER_FIRST_RULE
+        + "Jesteś ekspertem w sprzęcie biegowym. Odpowiadasz po polsku, konkretnie i praktycznie.\n"
+        f"Typ pytania: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        "Odpowiedz bezpośrednio. Jeśli potrzebujesz dokładnie jednej brakującej informacji "
+        "(np. temperatura, teren) — zapytaj o NIĄ JEDNĄ, po udzieleniu ogólnej odpowiedzi.\n"
+        "Jeśli dyscyplina nieznana — odpowiedz dla trail."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=350, state=state)
