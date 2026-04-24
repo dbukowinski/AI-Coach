@@ -21,6 +21,17 @@ from agent_nodes import (
     save_raw_node,
     think_node,
 )
+from intent_classifier import (
+    intent_classifier_node,
+    route_after_intent,
+    handle_question_node,
+    handle_training_plan_node,
+    handle_route_node,
+    handle_nutrition_node,
+    handle_race_node,
+    handle_context_info_node,
+    handle_gear_node,
+)
 
 
 def build_graph():
@@ -44,6 +55,16 @@ def build_graph():
     graph.add_node("ask_user", ask_user_node)
     graph.add_node("revise_plan", revise_plan_node)
     graph.add_node("finish", finish_node)
+
+    # intent classification + 7 handler branches
+    graph.add_node("intent_classifier", intent_classifier_node)
+    graph.add_node("handle_question", handle_question_node)
+    graph.add_node("handle_training_plan", handle_training_plan_node)
+    graph.add_node("handle_route", handle_route_node)
+    graph.add_node("handle_nutrition", handle_nutrition_node)
+    graph.add_node("handle_race", handle_race_node)
+    graph.add_node("handle_context_info", handle_context_info_node)
+    graph.add_node("handle_gear", handle_gear_node)
 
     # entry routing by mode
     def route_start(state: AgentState) -> str:
@@ -88,8 +109,46 @@ def build_graph():
     graph.add_edge("coach_dialog", "think")
     graph.add_edge("generate_plan", "display_plan")
     graph.add_edge("display_plan", "think")
-    graph.add_edge("ask_user", "think")
     graph.add_edge("revise_plan", "display_plan")
     graph.add_edge("finish", END)
+
+    # ask_user → intent_classifier when feedback present, else back to think
+    def route_after_ask_user(state: AgentState) -> str:
+        if state.done or state.plan_accepted or not state.user_feedback.strip():
+            return "think"
+        return "intent_classifier"
+
+    graph.add_conditional_edges(
+        "ask_user",
+        route_after_ask_user,
+        {
+            "think": "think",
+            "intent_classifier": "intent_classifier",
+        },
+    )
+
+    # intent_classifier → one of 7 handler branches
+    graph.add_conditional_edges(
+        "intent_classifier",
+        route_after_intent,
+        {
+            "handle_question": "handle_question",
+            "handle_training_plan": "handle_training_plan",
+            "handle_route": "handle_route",
+            "handle_nutrition": "handle_nutrition",
+            "handle_race": "handle_race",
+            "handle_context_info": "handle_context_info",
+            "handle_gear": "handle_gear",
+        },
+    )
+
+    # all handler branches return to think to continue the reasoning loop
+    graph.add_edge("handle_question", "think")
+    graph.add_edge("handle_training_plan", "think")
+    graph.add_edge("handle_route", "think")
+    graph.add_edge("handle_nutrition", "think")
+    graph.add_edge("handle_race", "think")
+    graph.add_edge("handle_context_info", "think")
+    graph.add_edge("handle_gear", "think")
 
     return graph.compile()
