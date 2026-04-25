@@ -384,53 +384,55 @@ def _append_response(state: AgentState, response: str) -> None:
 
 # ─── Human-readable subtype hints (never leak raw subtype codes to LLM) ─────
 
-_QUESTION_HINTS: Dict[str, str] = {
-    "Q_PACE":       "tempo biegu, pace per km, tempo progowe",
-    "Q_ZONES":      "strefy tętna i ich pomiar",
-    "Q_LONG_RUN":   "jak wykonać długi bieg (long run)",
-    "Q_INTERVALS":  "trening interwałowy",
-    "Q_RECOVERY":   "regeneracja po treningu",
-    "Q_ELEVATION":  "bieganie z przewyższeniami, zysk wysokości",
-    "Q_TERRAIN":    "wybór terenu i nawierzchni",
-    "Q_VERTICAL":   "trening pionowy",
-    "Q_PACE_TRAIL": "tempo trailowe i przeliczenia",
-    "Q_GEAR_TRAIL": "sprzęt na trail",
-    "Q_OTHER":      "pytanie treningowe lub rozmowa z agentem",
+# ─── Per-subtype prompt instructions (subtype codes never enter LLM strings) ──
+
+QUESTION_PROMPTS: Dict[str, str] = {
+    "Q_LONG_RUN":   "Użytkownik pyta jak wykonać długi bieg. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_PACE":       "Użytkownik pyta o tempo biegu. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_ZONES":      "Użytkownik pyta o strefy tętna. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_INTERVALS":  "Użytkownik pyta o interwały. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_RECOVERY":   "Użytkownik pyta o regenerację. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_ELEVATION":  "Użytkownik pyta o przewyższenia w treningu. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_TERRAIN":    "Użytkownik pyta o technikę biegu w terenie. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_VERTICAL":   "Użytkownik pyta o trening podejść. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_PACE_TRAIL": "Użytkownik pyta o tempo trailowe. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_GEAR_TRAIL": "Użytkownik pyta o sprzęt trailowy. Odpowiedz merytorycznie w max 4 zdaniach.",
+    "Q_OTHER":      "Użytkownik zadał pytanie treningowe. Odpowiedz merytorycznie w max 4 zdaniach.",
 }
 
-_GEAR_HINTS: Dict[str, str] = {
-    "GEAR_SHOES_ROAD":        "buty do biegania drogowego",
-    "GEAR_SHOES_TRAIL":       "buty trailowe na mokre lub techniczne szlaki",
-    "GEAR_WATCH":             "zegarki sportowe i GPS",
-    "GEAR_PACK":              "plecak biegowy",
-    "GEAR_POLES":             "kijki biegowe",
-    "GEAR_CLOTHING_WEATHER":  "ubranie na zmienne lub zimne warunki pogodowe",
-    "GEAR_CLOTHING_SUMMER":   "ubranie na upał i lato",
-    "GEAR_LAYERING_TRAIL":    "warstwowanie ubrania na trail",
-    "GEAR_RAIN_GEAR":         "kurtka przeciwdeszczowa na bieg",
+GEAR_PROMPTS: Dict[str, str] = {
+    "GEAR_SHOES_ROAD":       "Użytkownik pyta o buty do biegania na drodze. Odpowiedz bezpośrednio.",
+    "GEAR_SHOES_TRAIL":      "Użytkownik pyta o buty trailowe. Odpowiedz bezpośrednio.",
+    "GEAR_CLOTHING_WEATHER": "Użytkownik pyta co ubrać na bieg przy danej pogodzie. Odpowiedz bezpośrednio.",
+    "GEAR_CLOTHING_SUMMER":  "Użytkownik pyta o strój na upał. Odpowiedz bezpośrednio.",
+    "GEAR_LAYERING_TRAIL":   "Użytkownik pyta o warstwowanie ubrań na trail. Odpowiedz bezpośrednio.",
+    "GEAR_RAIN_GEAR":        "Użytkownik pyta o sprzęt na deszcz. Odpowiedz bezpośrednio.",
+    "GEAR_PACK":             "Użytkownik pyta o plecak biegowy. Odpowiedz bezpośrednio.",
+    "GEAR_POLES":            "Użytkownik pyta o kijki biegowe. Odpowiedz bezpośrednio.",
+    "GEAR_WATCH":            "Użytkownik pyta o zegarek sportowy. Odpowiedz bezpośrednio.",
 }
 
-_ROUTE_HINTS: Dict[str, str] = {
-    "ROUTE_REQUEST":  "prośba o zaplanowanie konkretnej trasy",
-    "ROUTE_LOCATION": "pytanie o miejsca do biegania w danej lokalizacji",
-    "ROUTE_SURFACE":  "nawierzchnia i typ terenu",
-    "ROUTE_SAFETY":   "bezpieczeństwo na trasie",
+ROUTE_PROMPTS: Dict[str, str] = {
+    "ROUTE_REQUEST":  "Użytkownik prosi o zaplanowanie trasy biegowej. Zasugeruj trasę lub zapytaj o lokalizację.",
+    "ROUTE_LOCATION": "Użytkownik pyta gdzie biegać w danej lokalizacji. Podaj konkretne miejsca.",
+    "ROUTE_SURFACE":  "Użytkownik pyta o nawierzchnię lub typ terenu. Odpowiedz bezpośrednio.",
+    "ROUTE_SAFETY":   "Użytkownik pyta o bezpieczeństwo na trasie. Odpowiedz bezpośrednio.",
 }
 
-_NUTRITION_HINTS: Dict[str, str] = {
-    "NUTRITION_PRE":    "żywienie przed treningiem lub startem",
-    "NUTRITION_DURING": "żywienie podczas biegu",
-    "NUTRITION_POST":   "żywienie po treningu i regeneracja żywieniowa",
-    "NUTRITION_RACE":   "strategia żywieniowa na wyścig",
-    "NUTRITION_WEIGHT": "waga i kontrola masy ciała sportowca",
+NUTRITION_PROMPTS: Dict[str, str] = {
+    "NUTRITION_PRE":    "Użytkownik pyta o żywienie przed treningiem lub startem. Odpowiedz bezpośrednio.",
+    "NUTRITION_DURING": "Użytkownik pyta o jedzenie i picie podczas biegu. Odpowiedz bezpośrednio.",
+    "NUTRITION_POST":   "Użytkownik pyta o żywienie po treningu i regenerację żywieniową. Odpowiedz bezpośrednio.",
+    "NUTRITION_RACE":   "Użytkownik pyta o strategię żywieniową na wyścig. Odpowiedz bezpośrednio.",
+    "NUTRITION_WEIGHT": "Użytkownik pyta o wagę lub kontrolę masy ciała. Odpowiedz bezpośrednio.",
 }
 
-_RACE_HINTS: Dict[str, str] = {
-    "RACE_SELECT":   "wybór wyścigu odpowiedniego do poziomu",
-    "RACE_PREP":     "przygotowanie do nadchodzącego wyścigu",
-    "RACE_STRATEGY": "strategia wyścigowa",
-    "RACE_POST":     "regeneracja i analiza po wyścigu",
-    "RACE_TAPER":    "tapering i redukcja obciążenia przed startem",
+RACE_PROMPTS: Dict[str, str] = {
+    "RACE_SELECT":   "Użytkownik pyta o wybór wyścigu odpowiedniego do jego poziomu. Odpowiedz bezpośrednio.",
+    "RACE_PREP":     "Użytkownik pyta o przygotowanie do nadchodzącego wyścigu. Odpowiedz bezpośrednio.",
+    "RACE_STRATEGY": "Użytkownik pyta o strategię wyścigową. Odpowiedz bezpośrednio.",
+    "RACE_POST":     "Użytkownik pyta o regenerację i analizę po wyścigu. Odpowiedz bezpośrednio.",
+    "RACE_TAPER":    "Użytkownik pyta o tapering przed startem. Odpowiedz bezpośrednio.",
 }
 
 # ─── 7 intent handler nodes ───────────────────────────────────────────────────
@@ -440,16 +442,12 @@ def handle_question_node(state: AgentState) -> AgentState:
     state.log(f"handle_question subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
-    topic = _QUESTION_HINTS.get(state.subtype or "", "pytanie treningowe")
-    discipline_hint = {"road": "bieganie drogowe", "trail": "biegi górskie i trail"}.get(
-        state.discipline or "both", "bieganie"
-    )
+    subtype_instruction = QUESTION_PROMPTS.get(state.subtype or "", QUESTION_PROMPTS["Q_OTHER"])
     system_prompt = (
         ANSWER_FIRST_RULE
-        + "Użytkownik zadał pytanie merytoryczne. Jesteś ekspertem w bieganiu.\n"
-        f"Temat pytania: {topic}. Dyscyplina: {discipline_hint}.\n"
+        + subtype_instruction + "\n"
         "Zasady:\n"
-        "- Odpowiedz w max 4 zdaniach. Nie pytaj o nic przed odpowiedzią.\n"
+        "- Nie pytaj o nic przed odpowiedzią.\n"
         "- Nie modyfikuj planu. Nie sprawdzaj obciążenia treningowego.\n"
         "- Nie pytaj o cele tygodniowe ani samopoczucie.\n"
         "- Jeśli pytanie dotyczy dyscypliny której nie znasz — odpowiedz ogólnie.\n"
@@ -502,14 +500,14 @@ def handle_route_node(state: AgentState) -> AgentState:
     state.log(f"handle_route subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
-    route_topic = _ROUTE_HINTS.get(state.subtype or "", "trasa biegowa")
+    route_instruction = ROUTE_PROMPTS.get(state.subtype or "", "Użytkownik pyta o trasę biegową. Odpowiedz bezpośrednio.")
     system_prompt = (
         ANSWER_FIRST_RULE
-        + "Jesteś ekspertem w planowaniu tras biegowych. Odpowiadasz po polsku.\n"
-        f"Rodzaj zapytania: {route_topic}.\n"
+        + route_instruction + "\n"
         "Jeśli lokalizacja jest podana — zasugeruj trasy od razu.\n"
         "Jeśli brakuje lokalizacji — zapytaj TYLKO o lokalizację, nic więcej.\n"
-        "Nie pytaj o samopoczucie ani stan zdrowia."
+        "Nie pytaj o samopoczucie ani stan zdrowia.\n"
+        "Odpowiedz po polsku."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=350, state=state)
@@ -525,12 +523,13 @@ def handle_nutrition_node(state: AgentState) -> AgentState:
     state.log(f"handle_nutrition subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
-    nutrition_topic = _NUTRITION_HINTS.get(state.subtype or "", "żywienie sportowe")
+    nutrition_instruction = NUTRITION_PROMPTS.get(state.subtype or "", "Użytkownik pyta o żywienie sportowe. Odpowiedz bezpośrednio.")
     system_prompt = (
         ANSWER_FIRST_RULE
-        + "Jesteś ekspertem w żywieniu sportowym dla biegaczy. Odpowiadasz po polsku.\n"
-        f"Temat: {nutrition_topic}.\n"
-        "Odpowiedz bezpośrednio na pytanie. Nie wspominaj o obciążeniu treningowym ani zmęczeniu."
+        + nutrition_instruction + "\n"
+        "Jesteś ekspertem w żywieniu sportowym dla biegaczy.\n"
+        "Nie wspominaj o obciążeniu treningowym ani zmęczeniu.\n"
+        "Odpowiedz po polsku."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=350, state=state)
@@ -546,13 +545,14 @@ def handle_race_node(state: AgentState) -> AgentState:
     state.log(f"handle_race subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
-    race_topic = _RACE_HINTS.get(state.subtype or "", "wyścig i start")
+    race_instruction = RACE_PROMPTS.get(state.subtype or "", "Użytkownik pyta o wyścig lub start. Odpowiedz bezpośrednio.")
     system_prompt = (
         ANSWER_FIRST_RULE
-        + "Jesteś ekspertem w przygotowaniach startowych i strategii wyścigowej. Odpowiadasz po polsku.\n"
-        f"Temat: {race_topic}.\n"
-        "Odpowiedz bezpośrednio. Nie pytaj o zdrowie ani samopoczucie przed odpowiedzią.\n"
-        "Jeśli brakuje daty startu — zapytaj TYLKO o datę startu, nic więcej."
+        + race_instruction + "\n"
+        "Jesteś ekspertem w przygotowaniach startowych i strategii wyścigowej.\n"
+        "Nie pytaj o zdrowie ani samopoczucie przed odpowiedzią.\n"
+        "Jeśli brakuje daty startu — zapytaj TYLKO o datę startu, nic więcej.\n"
+        "Odpowiedz po polsku."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=350, state=state)
@@ -605,16 +605,16 @@ def handle_gear_node(state: AgentState) -> AgentState:
     state.log(f"handle_gear subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
-    gear_topic = _GEAR_HINTS.get(state.subtype or "", "sprzęt biegowy")
+    gear_instruction = GEAR_PROMPTS.get(state.subtype or "", "Użytkownik pyta o sprzęt biegowy. Odpowiedz bezpośrednio.")
     system_prompt = (
         ANSWER_FIRST_RULE
-        + "Użytkownik pyta o sprzęt lub ubranie. Jesteś ekspertem w sprzęcie biegowym.\n"
-        f"Temat: {gear_topic}.\n"
+        + gear_instruction + "\n"
+        "Jesteś ekspertem w sprzęcie biegowym.\n"
         "Zasady:\n"
-        "- Odpowiedz bezpośrednio. Jeśli temperatura jest podana — użyj jej od razu.\n"
+        "- Jeśli temperatura jest podana — użyj jej od razu.\n"
         "- Nie pytaj o cele tygodniowe. Nie analizuj Stravy.\n"
-        "- Jeśli potrzebujesz dokładnie jednej brakującej informacji "
-        "(np. temperatura, teren) — zapytaj o NIĄ JEDNĄ, po udzieleniu ogólnej odpowiedzi.\n"
+        "- Jeśli potrzebujesz jednej brakującej informacji (np. temperatura, teren) "
+        "— zapytaj o NIĄ JEDNĄ, po udzieleniu ogólnej odpowiedzi.\n"
         "- Jeśli dyscyplina nieznana — odpowiedz dla trail.\n"
         "- Odpowiedz po polsku."
     )
