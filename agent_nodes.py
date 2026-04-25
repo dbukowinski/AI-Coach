@@ -1156,12 +1156,56 @@ def streamlit_seed_coaching_messages(state: AgentState) -> AgentState:
 def streamlit_coach_after_user(state: AgentState, user_text: str) -> Tuple[AgentState, bool]:
     """
     Jedna tura: wiadomość użytkownika + odpowiedź modelu.
+    Klasyfikuje intent — dla QUESTION/GEAR/etc. odpowiada bezpośrednio;
+    dla TRAINING_PLAN kontynuuje dialog coachingowy.
     Zwraca (stan, plan_ready).
     """
+    from intent_classifier import (
+        intent_classifier_node,
+        handle_question_node,
+        handle_gear_node,
+        handle_route_node,
+        handle_nutrition_node,
+        handle_race_node,
+        handle_context_info_node,
+    )
+
     text = (user_text or "").strip()
     if not text:
         return state, False
+
     state.messages.append({"role": "user", "content": text})
+    state.user_message = text
+    state.user_feedback = text
+
+    # Classify intent first
+    state = intent_classifier_node(state)
+    intent = state.intent or "QUESTION"
+
+    print(f"[Streamlit] coach_after_user intent={intent}/{state.subtype}")
+
+    # Non-plan intents: answer directly, never ask about load/goals
+    if intent == "QUESTION":
+        state = handle_question_node(state)
+        return state, False
+    if intent == "GEAR":
+        state = handle_gear_node(state)
+        return state, False
+    if intent == "ROUTE":
+        state = handle_route_node(state)
+        return state, False
+    if intent == "NUTRITION":
+        state = handle_nutrition_node(state)
+        return state, False
+    if intent == "RACE":
+        state = handle_race_node(state)
+        return state, False
+    if intent == "CONTEXT_INFO":
+        state = handle_context_info_node(state)
+        return state, False
+
+    # TRAINING_PLAN or unknown: continue pre-plan coaching dialog
+    state.user_feedback = ""  # prevent think → revise_plan
     reply, done = _coach_turn_llm(state)
     if not reply and not done:
         reply = "Dzięki za rozmowę — przechodzę do ułożenia planu."
@@ -1184,25 +1228,58 @@ def streamlit_finalize_coaching_and_plan(state: AgentState) -> AgentState:
 
 def streamlit_revise_plan_after_user(state: AgentState, user_text: str) -> AgentState:
     """
-    Kontynuacja dialogu PO wygenerowaniu planu: traktujemy wiadomość jako feedback
-    i przepuszczamy przez `revise_plan_node`, a następnie dopisujemy odpowiedź coacha
-    do `state.messages` (żeby UI miało ciągłą historię).
+    Kontynuacja dialogu PO wygenerowaniu planu.
+    Klasyfikuje intent — dla QUESTION/GEAR/etc. odpowiada bezpośrednio (bez rewizji planu);
+    dla TRAINING_PLAN przepuszcza przez revise_plan_node.
     """
+    from intent_classifier import (
+        intent_classifier_node,
+        handle_question_node,
+        handle_gear_node,
+        handle_route_node,
+        handle_nutrition_node,
+        handle_race_node,
+        handle_context_info_node,
+    )
+
     text = (user_text or "").strip()
     if not text:
         return state
 
-    # user mówi w czacie
     state.messages.append({"role": "user", "content": text})
-
-    # rewizja planu (deterministycznie lub przez Bedrock, zależnie od dostępności)
+    state.user_message = text
     state.user_feedback = text
-    state = revise_plan_node(state)
 
-    # odpowiedź coacha do UI
+    # Classify intent first
+    state = intent_classifier_node(state)
+    intent = state.intent or "QUESTION"
+
+    print(f"[Streamlit] revise_after_user intent={intent}/{state.subtype}")
+
+    # Non-plan intents: answer directly, don't touch the plan
+    if intent == "QUESTION":
+        state = handle_question_node(state)
+        return state
+    if intent == "GEAR":
+        state = handle_gear_node(state)
+        return state
+    if intent == "ROUTE":
+        state = handle_route_node(state)
+        return state
+    if intent == "NUTRITION":
+        state = handle_nutrition_node(state)
+        return state
+    if intent == "RACE":
+        state = handle_race_node(state)
+        return state
+    if intent == "CONTEXT_INFO":
+        state = handle_context_info_node(state)
+        return state
+
+    # TRAINING_PLAN: revise the plan (user_feedback already set)
+    state = revise_plan_node(state)
     reply = (state.coach_question or "").strip() or "Zaktualizowałem plan. Co jeszcze dopracować?"
     state.messages.append({"role": "assistant", "content": reply})
-
     return state
 
 def build_streamlit_demo_agent_state() -> AgentState:
