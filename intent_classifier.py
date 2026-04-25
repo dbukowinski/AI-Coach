@@ -74,20 +74,26 @@ Rules:
 - Never return anything outside the valid intents and subtypes listed above
 
 SPECIAL CASES — classify as QUESTION / Q_OTHER:
-- User expresses frustration with the agent ("coś mylisz", "nie rozumiesz", "źle", "pomyliłeś")
-- User gives a very short reply to a previous agent question ("ok", "nie", "tak", "nie zupełnie")
-  → Use conversation context to determine topic if clear; otherwise Q_OTHER
-- User corrects the agent ("mówiłem że nie", "zapytałem po prostu", "o to mi nie chodziło")
+- User expresses frustration with the agent ("coś mylisz", "nie rozumiesz", "źle odpowiedziałeś", "pomyliłeś")
+- User corrects the agent about topic ("o to mi nie chodziło", "zapytałem po prostu o X")
+
+SHORT CONTEXTUAL REPLIES — use conversation history to classify, do NOT treat as frustration:
+- "ok", "tak", "nie", "nie zupełnie nie" are normal conversational answers, NOT frustration
+- If previous agent message asked about fatigue/injury/illness → short reply maps to that CONTEXT_INFO subtype
+  Example: agent asks "Czy czujesz się zmęczony?" → user replies "nie, zupełnie nie"
+  → CONTEXT_INFO / FATIGUE (user is answering the fatigue question, denying it)
+- If previous agent message asked about plan → "ok" = TRAINING_PLAN / PLAN_MODIFY
+- If context is unclear → QUESTION / Q_OTHER
 
 NEVER classify as FATIGUE:
-- Frustration with the AI ("coś mylisz", "nie rozumiesz", "źle odpowiedziałeś")
-- Short negative replies ("nie", "nie zupełnie", "nie o to pytałem")
-- Corrections of agent misunderstanding
+- Expressions of frustration with the AI ("coś mylisz", "nie rozumiesz", "źle odpowiedziałeś")
+- Corrections of agent misunderstanding when not about physical state
 
-FATIGUE is ONLY for explicit physical statements:
+FATIGUE is ONLY for explicit physical statements OR direct answers to fatigue questions:
 - "jestem zmęczony po treningu" / "jestem wyczerpany"
 - "bolą mnie nogi" / "mam zakwasy"
 - "nie mam siły biegać" / "nogi jak z ołowiu"
+- "nie, zupełnie nie" as answer to "Czy czujesz się zmęczony?" → CONTEXT_INFO / FATIGUE
 
 --- FEW-SHOT EXAMPLES ---
 
@@ -106,17 +112,20 @@ User: "ile przewyższenia powinienem robić tygodniowo?"
 User: "jak przeliczać tempo trailowe na płaskie?"
 {"intent": "QUESTION", "subtype": "Q_PACE_TRAIL", "confidence": 0.92, "discipline": "trail"}
 
-User: "nie zupełnie nie" [previous agent message was about fatigue]
-{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.75, "discipline": "both"}
+Conversation: assistant: "Czy czujesz się zmęczony?" / user: "nie, zupełnie nie"
+{"intent": "CONTEXT_INFO", "subtype": "FATIGUE", "confidence": 0.85, "discipline": "both"}
+
+Conversation: assistant: "Czy czujesz się zmęczony?" / user: "ok, trochę"
+{"intent": "CONTEXT_INFO", "subtype": "FATIGUE", "confidence": 0.80, "discipline": "both"}
+
+Conversation: unclear / user: "ok"
+{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.60, "discipline": "both"}
 
 User: "znów coś mylisz"
 {"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.85, "discipline": "both"}
 
 User: "mówiłem że nie"
 {"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.80, "discipline": "both"}
-
-User: "ok"
-{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.60, "discipline": "both"}
 
 User: "jestem bardzo zmęczony, nogi jak z ołowiu"
 {"intent": "CONTEXT_INFO", "subtype": "FATIGUE", "confidence": 0.95, "discipline": "both"}
@@ -578,7 +587,7 @@ def handle_context_info_node(state: AgentState) -> AgentState:
         fallback_responses = {
             "INJURY": "Rozumiem — zanotowałem uraz. Co chcesz z tym zrobić — przesunąć trening czy zmodyfikować plan?",
             "ILLNESS": "Rozumiem — byłeś/aś chory/a. Co chcesz z tym zrobić — przesunąć trening czy zmodyfikować plan?",
-            "FATIGUE": "Rozumiem — czujesz zmęczenie. Co chcesz z tym zrobić — złagodzić intensywność czy przesunąć trening?",
+            "FATIGUE": "Rozumiem — zanotowałem Twój aktualny poziom zmęczenia. Co chcesz z tym zrobić — dostosować plan czy kontynuować jak jest?",
             "LIFE_EVENT": "Zanotowałem zmianę w Twoich planach. Co chcesz z tym zrobić — przesunąć trening czy dostosować plan?",
             "WEATHER": "Rozumiem — warunki pogodowe wpłyną na trening. Co chcesz z tym zrobić — dostosować plan czy zmienić trasę?",
             "PERSONAL_RECORD": "Rozumiem — osiągnąłeś/aś nowy rekord, gratulacje! Czy chcesz zaktualizować strefy treningowe na tej podstawie?",
