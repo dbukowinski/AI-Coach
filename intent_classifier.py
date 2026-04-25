@@ -181,9 +181,12 @@ User: "kiedy używać kijków?"
 
 ANSWER_FIRST_RULE = (
     "[ZASADA GLOBALNA]\n"
-    "Najpierw odpowiedz. Potem — jeśli musisz — zadaj jedno pytanie.\n"
-    "Nigdy nie zamieniaj odpowiedzi na pytanie o samopoczucie.\n"
-    "Dane ze Stravy to kontekst do personalizacji, nie powód do opóźnienia odpowiedzi.\n"
+    "Najpierw odpowiedz na pytanie użytkownika.\n"
+    "Jeśli potrzebujesz kontekstu — zadaj JEDNO pytanie, PO odpowiedzi.\n"
+    "Nigdy nie pytaj o zmęczenie, cele tygodniowe ani obciążenie treningowe\n"
+    "zanim nie odpiszesz na to co użytkownik zapytał.\n"
+    "Dane ze Stravy używaj cicho do personalizacji — nigdy jako powód\n"
+    "żeby opóźnić lub zastąpić odpowiedź.\n"
 )
 
 # ─── LLM helpers ─────────────────────────────────────────────────────────────
@@ -326,12 +329,11 @@ def handle_question_node(state: AgentState) -> AgentState:
 
     system_prompt = (
         ANSWER_FIRST_RULE
-        + "Jesteś ekspertem w bieganiu. Odpowiadasz na pytania treningowe krótko i faktycznie.\n"
-        "Użytkownik zadał pytanie merytoryczne.\n"
+        + "Użytkownik zadał pytanie merytoryczne. Jesteś ekspertem w bieganiu.\n"
         "Zasady:\n"
         "- Odpowiedz w max 4 zdaniach. Nie pytaj o nic przed odpowiedzią.\n"
-        "- Nie modyfikuj ani nie wspominaj o zmianie planu treningowego.\n"
-        "- Nie sprawdzaj obciążenia treningowego ani samopoczucia przed odpowiedzią.\n"
+        "- Nie modyfikuj planu. Nie sprawdzaj obciążenia treningowego.\n"
+        "- Nie pytaj o cele tygodniowe ani samopoczucie.\n"
         "- Jeśli pytanie dotyczy dyscypliny której nie znasz — odpowiedz ogólnie.\n"
         "- Odpowiedź po polsku.\n"
         f"- Kontekst pytania: {state.subtype}\n"
@@ -486,11 +488,15 @@ def handle_gear_node(state: AgentState) -> AgentState:
 
     system_prompt = (
         ANSWER_FIRST_RULE
-        + "Jesteś ekspertem w sprzęcie biegowym. Odpowiadasz po polsku, konkretnie i praktycznie.\n"
+        + "Użytkownik pyta o sprzęt lub ubranie. Jesteś ekspertem w sprzęcie biegowym.\n"
         f"Typ pytania: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
-        "Odpowiedz bezpośrednio. Jeśli potrzebujesz dokładnie jednej brakującej informacji "
+        "Zasady:\n"
+        "- Odpowiedz bezpośrednio. Jeśli temperatura jest podana — użyj jej od razu.\n"
+        "- Nie pytaj o cele tygodniowe. Nie analizuj Stravy.\n"
+        "- Jeśli potrzebujesz dokładnie jednej brakującej informacji "
         "(np. temperatura, teren) — zapytaj o NIĄ JEDNĄ, po udzieleniu ogólnej odpowiedzi.\n"
-        "Jeśli dyscyplina nieznana — odpowiedz dla trail."
+        "- Jeśli dyscyplina nieznana — odpowiedz dla trail.\n"
+        "- Odpowiedź po polsku."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=350, state=state)
