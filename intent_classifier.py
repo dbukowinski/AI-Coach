@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from groq import Groq
 
@@ -21,6 +21,7 @@ VALID_SUBTYPES: Dict[str, set] = {
     "QUESTION": {
         "Q_PACE", "Q_ZONES", "Q_LONG_RUN", "Q_INTERVALS", "Q_RECOVERY",
         "Q_ELEVATION", "Q_TERRAIN", "Q_VERTICAL", "Q_PACE_TRAIL", "Q_GEAR_TRAIL",
+        "Q_OTHER",
     },
     "ROUTE": {"ROUTE_REQUEST", "ROUTE_LOCATION", "ROUTE_SURFACE", "ROUTE_SAFETY"},
     "NUTRITION": {
@@ -39,20 +40,20 @@ VALID_SUBTYPES: Dict[str, set] = {
 
 FALLBACK: Dict[str, Any] = {
     "intent": "QUESTION",
-    "subtype": "Q_LONG_RUN",
+    "subtype": "Q_OTHER",
     "confidence": 0.5,
     "discipline": "both",
 }
 
 # ─── Classifier system prompt ─────────────────────────────────────────────────
 
-CLASSIFIER_SYSTEM_PROMPT = """Classify the user message into exactly one intent and one subtype.
+CLASSIFIER_SYSTEM_PROMPT = """You receive a conversation (last up to 3 messages) and must classify the LAST user message.
 Return ONLY valid JSON, no explanation, no markdown, no backticks.
 
 Valid intents and subtypes:
 
 TRAINING_PLAN: PLAN_CREATE, PLAN_MODIFY, PLAN_REDUCE, PLAN_EXTEND, PLAN_EXPLAIN
-QUESTION: Q_PACE, Q_ZONES, Q_LONG_RUN, Q_INTERVALS, Q_RECOVERY, Q_ELEVATION, Q_TERRAIN, Q_VERTICAL, Q_PACE_TRAIL, Q_GEAR_TRAIL
+QUESTION: Q_PACE, Q_ZONES, Q_LONG_RUN, Q_INTERVALS, Q_RECOVERY, Q_ELEVATION, Q_TERRAIN, Q_VERTICAL, Q_PACE_TRAIL, Q_GEAR_TRAIL, Q_OTHER
 ROUTE: ROUTE_REQUEST, ROUTE_LOCATION, ROUTE_SURFACE, ROUTE_SAFETY
 NUTRITION: NUTRITION_PRE, NUTRITION_DURING, NUTRITION_POST, NUTRITION_RACE, NUTRITION_WEIGHT
 RACE: RACE_SELECT, RACE_PREP, RACE_STRATEGY, RACE_POST, RACE_TAPER
@@ -69,8 +70,24 @@ Response format:
 
 Rules:
 - discipline: "road" for road running, "trail" for mountains/trails, "both" if unclear
-- If unsure about intent, default to QUESTION
+- If unsure about intent, default to QUESTION / Q_OTHER
 - Never return anything outside the valid intents and subtypes listed above
+
+SPECIAL CASES — classify as QUESTION / Q_OTHER:
+- User expresses frustration with the agent ("coś mylisz", "nie rozumiesz", "źle", "pomyliłeś")
+- User gives a very short reply to a previous agent question ("ok", "nie", "tak", "nie zupełnie")
+  → Use conversation context to determine topic if clear; otherwise Q_OTHER
+- User corrects the agent ("mówiłem że nie", "zapytałem po prostu", "o to mi nie chodziło")
+
+NEVER classify as FATIGUE:
+- Frustration with the AI ("coś mylisz", "nie rozumiesz", "źle odpowiedziałeś")
+- Short negative replies ("nie", "nie zupełnie", "nie o to pytałem")
+- Corrections of agent misunderstanding
+
+FATIGUE is ONLY for explicit physical statements:
+- "jestem zmęczony po treningu" / "jestem wyczerpany"
+- "bolą mnie nogi" / "mam zakwasy"
+- "nie mam siły biegać" / "nogi jak z ołowiu"
 
 --- FEW-SHOT EXAMPLES ---
 
@@ -89,11 +106,32 @@ User: "ile przewyższenia powinienem robić tygodniowo?"
 User: "jak przeliczać tempo trailowe na płaskie?"
 {"intent": "QUESTION", "subtype": "Q_PACE_TRAIL", "confidence": 0.92, "discipline": "trail"}
 
+User: "nie zupełnie nie" [previous agent message was about fatigue]
+{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.75, "discipline": "both"}
+
+User: "znów coś mylisz"
+{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.85, "discipline": "both"}
+
+User: "mówiłem że nie"
+{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.80, "discipline": "both"}
+
+User: "ok"
+{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.60, "discipline": "both"}
+
+User: "jestem bardzo zmęczony, nogi jak z ołowiu"
+{"intent": "CONTEXT_INFO", "subtype": "FATIGUE", "confidence": 0.95, "discipline": "both"}
+
+User: "jestem zmęczony po wczorajszym treningu"
+{"intent": "CONTEXT_INFO", "subtype": "FATIGUE", "confidence": 0.95, "discipline": "both"}
+
 User: "zrób mi plan na maraton za 12 tygodni"
 {"intent": "TRAINING_PLAN", "subtype": "PLAN_CREATE", "confidence": 0.98, "discipline": "road"}
 
 User: "chcę w weekend góry, zmień plan"
 {"intent": "TRAINING_PLAN", "subtype": "PLAN_MODIFY", "confidence": 0.96, "discipline": "trail"}
+
+User: "kontynuujmy wzrost loadu"
+{"intent": "TRAINING_PLAN", "subtype": "PLAN_CREATE", "confidence": 0.93, "discipline": "both"}
 
 User: "za dużo kilometrów, ogranicz trochę"
 {"intent": "TRAINING_PLAN", "subtype": "PLAN_REDUCE", "confidence": 0.95, "discipline": "both"}
@@ -143,14 +181,14 @@ User: "bolą mnie kolana od wczoraj"
 User: "byłem chory 3 dni, nie biegałem"
 {"intent": "CONTEXT_INFO", "subtype": "ILLNESS", "confidence": 0.96, "discipline": "both"}
 
-User: "jestem bardzo zmęczony, nogi jak z ołowiu"
-{"intent": "CONTEXT_INFO", "subtype": "FATIGUE", "confidence": 0.95, "discipline": "both"}
-
 User: "mam delegację w przyszłym tygodniu"
 {"intent": "CONTEXT_INFO", "subtype": "LIFE_EVENT", "confidence": 0.93, "discipline": "both"}
 
 User: "zrobiłem PR na 10 km!"
 {"intent": "CONTEXT_INFO", "subtype": "PERSONAL_RECORD", "confidence": 0.96, "discipline": "road"}
+
+User: "co ubrać na 9 stopni?"
+{"intent": "GEAR", "subtype": "GEAR_CLOTHING_WEATHER", "confidence": 0.97, "discipline": "both"}
 
 User: "jakie buty do maratonu polecasz?"
 {"intent": "GEAR", "subtype": "GEAR_SHOES_ROAD", "confidence": 0.96, "discipline": "road"}
@@ -227,10 +265,25 @@ def _safe_call_llm(
 
 # ─── Core classification ──────────────────────────────────────────────────────
 
-def classify_intent(message: str) -> Dict[str, Any]:
-    """Call Groq to classify message. Returns dict with intent/subtype/confidence/discipline."""
+def classify_intent(
+    message: str,
+    messages: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Call Groq to classify message. Returns dict with intent/subtype/confidence/discipline.
+    Passes last 3 conversation messages as context so short replies are classified correctly.
+    """
     try:
-        raw = _call_llm(message, system_prompt=CLASSIFIER_SYSTEM_PROMPT, max_tokens=150)
+        last_3 = (messages or [])[-3:]
+        if last_3:
+            context = "\n".join(f"{m['role']}: {m['content']}" for m in last_3)
+            full_input = (
+                f"Conversation so far:\n{context}\n\n"
+                f"Classify the LAST user message only: {message!r}"
+            )
+        else:
+            full_input = message
+
+        raw = _call_llm(full_input, system_prompt=CLASSIFIER_SYSTEM_PROMPT, max_tokens=150)
         text = raw.strip()
 
         # Strip markdown fences if present
@@ -246,24 +299,24 @@ def classify_intent(message: str) -> Dict[str, Any]:
         discipline = str(data.get("discipline", "both"))
 
         if intent not in VALID_INTENTS:
-            print(f"[IntentClassifier] FALLBACK: invalid intent '{intent}' for: {message!r}")
+            print(f"FALLBACK: invalid intent '{intent}' for: {message!r} — raw: {raw!r}")
             return FALLBACK.copy()
 
         if subtype not in VALID_SUBTYPES.get(intent, set()):
-            print(f"[IntentClassifier] FALLBACK: invalid subtype '{subtype}' (intent={intent}) for: {message!r}")
+            print(f"FALLBACK: invalid subtype '{subtype}' (intent={intent}) for: {message!r} — raw: {raw!r}")
             return FALLBACK.copy()
 
         if confidence < 0.4:
-            print(f"[IntentClassifier] FALLBACK: low confidence {confidence:.2f} for: {message!r}")
+            print(f"FALLBACK: low confidence {confidence:.2f} for: {message!r}")
             return {**FALLBACK, "discipline": discipline}
 
         return {"intent": intent, "subtype": subtype, "confidence": confidence, "discipline": discipline}
 
     except json.JSONDecodeError as e:
-        print(f"[IntentClassifier] FALLBACK: JSON parse error for: {message!r} — {e}")
+        print(f"FALLBACK: JSON parse error for: {message!r} — {e} — raw: {raw!r}")
         return FALLBACK.copy()
     except Exception as e:
-        print(f"[IntentClassifier] FALLBACK: unexpected error for: {message!r} — {e}")
+        print(f"FALLBACK: unexpected error for: {message!r} — {e}")
         return FALLBACK.copy()
 
 
@@ -273,15 +326,15 @@ def intent_classifier_node(state: AgentState) -> AgentState:
     message = (state.user_feedback or state.user_message or "").strip()
 
     if not message:
-        state.log("intent_classifier: empty message, defaulting to QUESTION/Q_LONG_RUN")
+        state.log("intent_classifier: empty message, defaulting to QUESTION/Q_OTHER")
         state.intent = "QUESTION"
-        state.subtype = "Q_LONG_RUN"
+        state.subtype = "Q_OTHER"
         state.discipline = "both"
         state.intent_confidence = 0.5
         return state
 
     state.user_message = message
-    result = classify_intent(message)
+    result = classify_intent(message, messages=state.messages)
 
     state.intent = result["intent"]
     state.subtype = result["subtype"]
@@ -320,6 +373,57 @@ def _append_response(state: AgentState, response: str) -> None:
     state.coach_question = response
 
 
+# ─── Human-readable subtype hints (never leak raw subtype codes to LLM) ─────
+
+_QUESTION_HINTS: Dict[str, str] = {
+    "Q_PACE":       "tempo biegu, pace per km, tempo progowe",
+    "Q_ZONES":      "strefy tętna i ich pomiar",
+    "Q_LONG_RUN":   "jak wykonać długi bieg (long run)",
+    "Q_INTERVALS":  "trening interwałowy",
+    "Q_RECOVERY":   "regeneracja po treningu",
+    "Q_ELEVATION":  "bieganie z przewyższeniami, zysk wysokości",
+    "Q_TERRAIN":    "wybór terenu i nawierzchni",
+    "Q_VERTICAL":   "trening pionowy",
+    "Q_PACE_TRAIL": "tempo trailowe i przeliczenia",
+    "Q_GEAR_TRAIL": "sprzęt na trail",
+    "Q_OTHER":      "pytanie treningowe lub rozmowa z agentem",
+}
+
+_GEAR_HINTS: Dict[str, str] = {
+    "GEAR_SHOES_ROAD":        "buty do biegania drogowego",
+    "GEAR_SHOES_TRAIL":       "buty trailowe na mokre lub techniczne szlaki",
+    "GEAR_WATCH":             "zegarki sportowe i GPS",
+    "GEAR_PACK":              "plecak biegowy",
+    "GEAR_POLES":             "kijki biegowe",
+    "GEAR_CLOTHING_WEATHER":  "ubranie na zmienne lub zimne warunki pogodowe",
+    "GEAR_CLOTHING_SUMMER":   "ubranie na upał i lato",
+    "GEAR_LAYERING_TRAIL":    "warstwowanie ubrania na trail",
+    "GEAR_RAIN_GEAR":         "kurtka przeciwdeszczowa na bieg",
+}
+
+_ROUTE_HINTS: Dict[str, str] = {
+    "ROUTE_REQUEST":  "prośba o zaplanowanie konkretnej trasy",
+    "ROUTE_LOCATION": "pytanie o miejsca do biegania w danej lokalizacji",
+    "ROUTE_SURFACE":  "nawierzchnia i typ terenu",
+    "ROUTE_SAFETY":   "bezpieczeństwo na trasie",
+}
+
+_NUTRITION_HINTS: Dict[str, str] = {
+    "NUTRITION_PRE":    "żywienie przed treningiem lub startem",
+    "NUTRITION_DURING": "żywienie podczas biegu",
+    "NUTRITION_POST":   "żywienie po treningu i regeneracja żywieniowa",
+    "NUTRITION_RACE":   "strategia żywieniowa na wyścig",
+    "NUTRITION_WEIGHT": "waga i kontrola masy ciała sportowca",
+}
+
+_RACE_HINTS: Dict[str, str] = {
+    "RACE_SELECT":   "wybór wyścigu odpowiedniego do poziomu",
+    "RACE_PREP":     "przygotowanie do nadchodzącego wyścigu",
+    "RACE_STRATEGY": "strategia wyścigowa",
+    "RACE_POST":     "regeneracja i analiza po wyścigu",
+    "RACE_TAPER":    "tapering i redukcja obciążenia przed startem",
+}
+
 # ─── 7 intent handler nodes ───────────────────────────────────────────────────
 
 def handle_question_node(state: AgentState) -> AgentState:
@@ -327,17 +431,20 @@ def handle_question_node(state: AgentState) -> AgentState:
     state.log(f"handle_question subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
+    topic = _QUESTION_HINTS.get(state.subtype or "", "pytanie treningowe")
+    discipline_hint = {"road": "bieganie drogowe", "trail": "biegi górskie i trail"}.get(
+        state.discipline or "both", "bieganie"
+    )
     system_prompt = (
         ANSWER_FIRST_RULE
         + "Użytkownik zadał pytanie merytoryczne. Jesteś ekspertem w bieganiu.\n"
+        f"Temat pytania: {topic}. Dyscyplina: {discipline_hint}.\n"
         "Zasady:\n"
         "- Odpowiedz w max 4 zdaniach. Nie pytaj o nic przed odpowiedzią.\n"
         "- Nie modyfikuj planu. Nie sprawdzaj obciążenia treningowego.\n"
         "- Nie pytaj o cele tygodniowe ani samopoczucie.\n"
         "- Jeśli pytanie dotyczy dyscypliny której nie znasz — odpowiedz ogólnie.\n"
-        "- Odpowiedź po polsku.\n"
-        f"- Kontekst pytania: {state.subtype}\n"
-        f"- Dyscyplina: {state.discipline or 'both'}"
+        "- Odpowiedz po polsku."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=300, state=state)
@@ -386,10 +493,11 @@ def handle_route_node(state: AgentState) -> AgentState:
     state.log(f"handle_route subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
+    route_topic = _ROUTE_HINTS.get(state.subtype or "", "trasa biegowa")
     system_prompt = (
         ANSWER_FIRST_RULE
         + "Jesteś ekspertem w planowaniu tras biegowych. Odpowiadasz po polsku.\n"
-        f"Typ zapytania: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        f"Rodzaj zapytania: {route_topic}.\n"
         "Jeśli lokalizacja jest podana — zasugeruj trasy od razu.\n"
         "Jeśli brakuje lokalizacji — zapytaj TYLKO o lokalizację, nic więcej.\n"
         "Nie pytaj o samopoczucie ani stan zdrowia."
@@ -408,10 +516,11 @@ def handle_nutrition_node(state: AgentState) -> AgentState:
     state.log(f"handle_nutrition subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
+    nutrition_topic = _NUTRITION_HINTS.get(state.subtype or "", "żywienie sportowe")
     system_prompt = (
         ANSWER_FIRST_RULE
         + "Jesteś ekspertem w żywieniu sportowym dla biegaczy. Odpowiadasz po polsku.\n"
-        f"Kontekst: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        f"Temat: {nutrition_topic}.\n"
         "Odpowiedz bezpośrednio na pytanie. Nie wspominaj o obciążeniu treningowym ani zmęczeniu."
     )
 
@@ -428,10 +537,11 @@ def handle_race_node(state: AgentState) -> AgentState:
     state.log(f"handle_race subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
+    race_topic = _RACE_HINTS.get(state.subtype or "", "wyścig i start")
     system_prompt = (
         ANSWER_FIRST_RULE
         + "Jesteś ekspertem w przygotowaniach startowych i strategii wyścigowej. Odpowiadasz po polsku.\n"
-        f"Kontekst: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        f"Temat: {race_topic}.\n"
         "Odpowiedz bezpośrednio. Nie pytaj o zdrowie ani samopoczucie przed odpowiedzią.\n"
         "Jeśli brakuje daty startu — zapytaj TYLKO o datę startu, nic więcej."
     )
@@ -486,17 +596,18 @@ def handle_gear_node(state: AgentState) -> AgentState:
     state.log(f"handle_gear subtype={state.subtype}")
     message = state.user_message or state.user_feedback
 
+    gear_topic = _GEAR_HINTS.get(state.subtype or "", "sprzęt biegowy")
     system_prompt = (
         ANSWER_FIRST_RULE
         + "Użytkownik pyta o sprzęt lub ubranie. Jesteś ekspertem w sprzęcie biegowym.\n"
-        f"Typ pytania: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        f"Temat: {gear_topic}.\n"
         "Zasady:\n"
         "- Odpowiedz bezpośrednio. Jeśli temperatura jest podana — użyj jej od razu.\n"
         "- Nie pytaj o cele tygodniowe. Nie analizuj Stravy.\n"
         "- Jeśli potrzebujesz dokładnie jednej brakującej informacji "
         "(np. temperatura, teren) — zapytaj o NIĄ JEDNĄ, po udzieleniu ogólnej odpowiedzi.\n"
         "- Jeśli dyscyplina nieznana — odpowiedz dla trail.\n"
-        "- Odpowiedź po polsku."
+        "- Odpowiedz po polsku."
     )
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=350, state=state)
