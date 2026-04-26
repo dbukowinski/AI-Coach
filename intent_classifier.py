@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import traceback
 from typing import Any, Dict, Optional
 
 from groq import Groq
@@ -21,6 +22,7 @@ VALID_SUBTYPES: Dict[str, set] = {
     "QUESTION": {
         "Q_PACE", "Q_ZONES", "Q_LONG_RUN", "Q_INTERVALS", "Q_RECOVERY",
         "Q_ELEVATION", "Q_TERRAIN", "Q_VERTICAL", "Q_PACE_TRAIL", "Q_GEAR_TRAIL",
+        "Q_OTHER",
     },
     "ROUTE": {"ROUTE_REQUEST", "ROUTE_LOCATION", "ROUTE_SURFACE", "ROUTE_SAFETY"},
     "NUTRITION": {
@@ -47,6 +49,7 @@ FALLBACK: Dict[str, Any] = {
 # Human-readable labels for subtype codes — used in LLM prompts instead of raw codes
 _SUBTYPE_LABELS: Dict[str, str] = {
     # QUESTION
+    "Q_OTHER": "pytanie ogólne",
     "Q_PACE": "tempo biegowe",
     "Q_ZONES": "strefy tętna",
     "Q_LONG_RUN": "bieg długi",
@@ -259,6 +262,7 @@ def _safe_call_llm(
     try:
         return _call_llm(user_prompt, system_prompt=system_prompt, max_tokens=max_tokens)
     except Exception as e:
+        traceback.print_exc()
         msg = f"[IntentClassifier] handler LLM failed: {e}"
         if state:
             state.log(msg)
@@ -269,10 +273,22 @@ def _safe_call_llm(
 
 # ─── Core classification ──────────────────────────────────────────────────────
 
+_DEFAULT_SUBTYPE: Dict[str, str] = {
+    "QUESTION": "Q_OTHER",
+    "TRAINING_PLAN": "PLAN_CREATE",
+    "ROUTE": "ROUTE_REQUEST",
+    "NUTRITION": "NUTRITION_PRE",
+    "RACE": "RACE_PREP",
+    "CONTEXT_INFO": "FATIGUE",
+    "GEAR": "GEAR_SHOES_ROAD",
+}
+
+
 def classify_intent(message: str) -> Dict[str, Any]:
     """Call Groq to classify message. Returns dict with intent/subtype/confidence/discipline."""
     try:
         raw = _call_llm(message, system_prompt=CLASSIFIER_SYSTEM_PROMPT, max_tokens=150)
+        print(f"RAW CLASSIFIER: {raw!r}")
         text = raw.strip()
 
         # Strip markdown fences if present
@@ -288,23 +304,26 @@ def classify_intent(message: str) -> Dict[str, Any]:
         discipline = str(data.get("discipline", "both"))
 
         if intent not in VALID_INTENTS:
-            print(f"[IntentClassifier] FALLBACK: invalid intent '{intent}' for: {message!r}")
-            return FALLBACK.copy()
+            print(f"[IntentClassifier] invalid intent '{intent}' → QUESTION/Q_OTHER for: {message!r}")
+            intent = "QUESTION"
+            subtype = "Q_OTHER"
 
-        if subtype not in VALID_SUBTYPES.get(intent, set()):
-            print(f"[IntentClassifier] FALLBACK: invalid subtype '{subtype}' (intent={intent}) for: {message!r}")
-            return FALLBACK.copy()
+        elif subtype not in VALID_SUBTYPES.get(intent, set()):
+            fixed = _DEFAULT_SUBTYPE.get(intent, "Q_OTHER")
+            print(f"[IntentClassifier] invalid subtype '{subtype}' for intent={intent} → {fixed}")
+            subtype = fixed
 
         if confidence < 0.4:
-            print(f"[IntentClassifier] FALLBACK: low confidence {confidence:.2f} for: {message!r}")
-            return {**FALLBACK, "discipline": discipline}
+            print(f"[IntentClassifier] low confidence {confidence:.2f} for: {message!r}")
 
         return {"intent": intent, "subtype": subtype, "confidence": confidence, "discipline": discipline}
 
     except json.JSONDecodeError as e:
+        traceback.print_exc()
         print(f"[IntentClassifier] FALLBACK: JSON parse error for: {message!r} — {e}")
         return FALLBACK.copy()
     except Exception as e:
+        traceback.print_exc()
         print(f"[IntentClassifier] FALLBACK: unexpected error for: {message!r} — {e}")
         return FALLBACK.copy()
 

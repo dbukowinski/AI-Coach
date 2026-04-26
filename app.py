@@ -500,15 +500,20 @@ with chat_col:
     ):
         if agent:
             with st.spinner("Coach myśli…"):
-                # Przed planem: dialog coachingowy -> PLAN_READY -> generowanie planu
-                if not agent.plan_draft:
-                    agent, plan_ready = streamlit_coach_after_user(agent, prompt)
-                    if plan_ready:
-                        agent = streamlit_finalize_coaching_and_plan(agent)
-                # Po planie: kolejne wiadomości rewizują plan
-                else:
-                    agent = streamlit_revise_plan_after_user(agent, prompt)
-                st.session_state.agent = agent
+                try:
+                    # Przed planem: dialog coachingowy -> PLAN_READY -> generowanie planu
+                    if not agent.plan_draft:
+                        agent, plan_ready = streamlit_coach_after_user(agent, prompt)
+                        if plan_ready:
+                            agent = streamlit_finalize_coaching_and_plan(agent)
+                    # Po planie: kolejne wiadomości rewizują plan
+                    else:
+                        agent = streamlit_revise_plan_after_user(agent, prompt)
+                    st.session_state.agent = agent
+                except Exception as e:
+                    import traceback as _tb
+                    _tb.print_exc()
+                    st.error(f"Błąd agenta: {e}")
         st.rerun()
 
     if plan_done:

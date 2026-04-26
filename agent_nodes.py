@@ -4,6 +4,7 @@ import copy
 import csv
 import json
 import os
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -77,6 +78,7 @@ def _call_llm(user_prompt: str, max_tokens: int = 512, system_prompt: str = "") 
         )
         return response.choices[0].message.content
     except Exception as e:
+        traceback.print_exc()
         print(f"[Agent] Groq call failed, falling back to deterministic logic: {e}")
         raise
 
@@ -656,6 +658,7 @@ def _apply_feedback_rules(plan: Dict[str, Any], feedback: str) -> Dict[str, Any]
             raise ValueError("Revised plan is not a JSON object.")
         return revised
     except Exception as e:
+        traceback.print_exc()
         print(f"[Agent] Bedrock feedback reviser failed, falling back to deterministic rules: {e}")
         return _apply_feedback_rules_deterministic(plan, feedback)
 
@@ -909,6 +912,7 @@ def coaching_brief_node(state: AgentState) -> AgentState:
         try:
             _coaching_brief_llm(state)
         except Exception as e:
+            traceback.print_exc()
             state.log(f"coaching_brief LLM fallback: {e}")
             _coaching_brief_deterministic(state)
         state.coaching_brief_ready = True
@@ -922,6 +926,7 @@ def coaching_brief_node(state: AgentState) -> AgentState:
             },
         )
     except Exception as e:
+        traceback.print_exc()
         state.add_error(f"coaching_brief failed: {e}")
         state.done = True
     return state
@@ -1008,6 +1013,7 @@ def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
         visible, done = _strip_plan_ready_marker(raw)
         return visible, done
     except Exception as e:
+        traceback.print_exc()
         state.log(f"coach_turn LLM unavailable, fallback to deterministic: {e}")
         return _coach_turn_fallback_deterministic(state)
 
@@ -1042,6 +1048,7 @@ def _extract_context_llm(state: AgentState) -> Dict[str, Any]:
         data = _parse_json_object(raw)
         return data if isinstance(data, dict) else {}
     except Exception:
+        traceback.print_exc()
         return {}
 
 
@@ -1092,6 +1099,7 @@ def _enrich_plan_explanation_with_conversation(state: AgentState, plan: Dict[str
             base = (plan.get("explanation") or "").strip()
             plan["explanation"] = (base + "\n\n— Komentarz trenera —\n" + addon).strip()
     except Exception as e:
+        traceback.print_exc()
         state.log(f"plan explanation enrich skipped: {e}")
     return plan
 
@@ -1150,6 +1158,7 @@ def coach_dialog_node(state: AgentState) -> AgentState:
         _apply_extracted_context(state, ctx)
         _save_json(DATA_DIR / "coaching_transcript.json", {"messages": state.messages, "extracted": ctx})
     except Exception as e:
+        traceback.print_exc()
         state.add_error(f"coach_dialog failed: {e}")
         state.dialog_complete = True
     return state
