@@ -17,7 +17,8 @@ def get_secret(key: str) -> str:
     value = None
     try:
         import streamlit as st
-        value = st.secrets.get(key)
+        if key in st.secrets and st.secrets[key] not in (None, ""):
+            value = str(st.secrets[key]).strip()
     except Exception:
         value = None
     value = value or os.getenv(key)

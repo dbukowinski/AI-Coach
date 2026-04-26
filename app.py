@@ -246,6 +246,24 @@ _init_session()
 
 with st.sidebar:
     st.markdown("### Ustawienia")
+
+    # ── GROQ key check ──────────────────────────────────────────────────────────
+    def _groq_key_loaded() -> bool:
+        try:
+            if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"] not in (None, ""):
+                return True
+        except Exception:
+            pass
+        return bool(os.getenv("GROQ_API_KEY", "").strip())
+
+    if not _groq_key_loaded():
+        st.error(
+            "**GROQ_API_KEY nie jest ustawiony.**\n\n"
+            "Wejdź w **Settings → Secrets** i dodaj:\n"
+            "```\nGROQ_API_KEY = \"gsk_...\"\n```\n"
+            "Potem kliknij **Reboot app**."
+        )
+
     days = st.number_input("Okno dni (Strava / analiza)", min_value=7, max_value=90, value=28, step=1)
     use_demo = st.toggle("Tryb demo (bez Strava, przykładowe metryki)", value=st.session_state.use_demo)
     if use_demo != st.session_state.use_demo:
@@ -392,7 +410,7 @@ with st.sidebar:
                         st.error("Nie udało się wymienić `code` na tokeny.")
                         st.code(str(e))
 
-    with st.expander("Diagnostyka Stravy (Cloud)"):
+    with st.expander("Diagnostyka sekretów (GROQ + Strava)"):
         import os
 
         def _mask(v: object) -> str:
@@ -405,6 +423,22 @@ with st.sidebar:
                 return "***"
             return s[:2] + "…" + s[-2:]
 
+        def _secret_val(key: str) -> str:
+            try:
+                if key in st.secrets and st.secrets[key] not in (None, ""):
+                    return str(st.secrets[key]).strip()
+            except Exception:
+                pass
+            return os.getenv(key) or ""
+
+        st.markdown("**GROQ:**")
+        groq_val = _secret_val("GROQ_API_KEY")
+        if groq_val:
+            st.success(f"`GROQ_API_KEY`: {_mask(groq_val)}")
+        else:
+            st.error("`GROQ_API_KEY` — brak! Dodaj w Settings → Secrets.")
+
+        st.markdown("**Strava:**")
         keys = [
             "STRAVA_CLIENT_ID",
             "STRAVA_CLIENT_SECRET",
