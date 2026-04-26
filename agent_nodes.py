@@ -40,6 +40,20 @@ def _safe_call(module_name: str, candidate_functions: List[str], *args, **kwargs
     )
 
 
+def trim_history(messages: List[Dict[str, str]], max_tokens: int = 2500) -> List[Dict[str, str]]:
+    system = [m for m in messages if m.get("role") == "system"]
+    non_system = [m for m in messages if m.get("role") != "system"]
+    kept, total = [], 0
+    for m in reversed(non_system):
+        tokens = len(m.get("content", "")) // 4
+        if total + tokens > max_tokens:
+            break
+        kept.insert(0, m)
+        total += tokens
+    print(f"History tokens: ~{total}")
+    return system + kept
+
+
 def _call_llm(user_prompt: str, max_tokens: int = 512, system_prompt: str = "") -> str:
     """
     Wywołanie modelu przez Groq API (OpenAI-compatible chat completions).
@@ -967,7 +981,7 @@ def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
     summary_json = json.dumps(state.training_summary, ensure_ascii=False, indent=2)
     patterns_txt = "\n".join(f"• {p}" for p in state.patterns) or "• (brak)"
     flags_txt = "\n".join(f"• {f}" for f in (state.flags or [])) or "• (brak)"
-    history = _format_messages_for_prompt(state.messages)
+    history = _format_messages_for_prompt(trim_history(state.messages))
 
     system_prompt = (
         "Jesteś doświadczonym trenerem biegowym prowadzącym krótką rozmowę przed ułożeniem "
@@ -999,7 +1013,7 @@ def _coach_turn_llm(state: AgentState) -> Tuple[str, bool]:
 
 
 def _extract_context_llm(state: AgentState) -> Dict[str, Any]:
-    conv = _format_messages_for_prompt(state.messages)
+    conv = _format_messages_for_prompt(trim_history(state.messages))
     system_prompt = (
         "Jesteś ekstraherem preferencji treningowych. Na podstawie rozmowy trener–sportowiec "
         "wyciągasz dane do planowania tygodnia i zwracasz wyłącznie JSON — zero komentarzy poza nim."
@@ -1058,7 +1072,7 @@ def _apply_extracted_context(state: AgentState, ctx: Dict[str, Any]) -> None:
 
 
 def _enrich_plan_explanation_with_conversation(state: AgentState, plan: Dict[str, Any]) -> Dict[str, Any]:
-    conv = _format_messages_for_prompt(state.messages)
+    conv = _format_messages_for_prompt(trim_history(state.messages))
     summary_json = json.dumps(state.training_summary, ensure_ascii=False, indent=2)
     system_prompt = (
         "Jesteś doświadczonym trenerem biegowym. Piszesz krótkie, konkretne uzasadnienia "

@@ -44,6 +44,48 @@ FALLBACK: Dict[str, Any] = {
     "discipline": "both",
 }
 
+# Human-readable labels for subtype codes — used in LLM prompts instead of raw codes
+_SUBTYPE_LABELS: Dict[str, str] = {
+    # QUESTION
+    "Q_PACE": "tempo biegowe",
+    "Q_ZONES": "strefy tętna",
+    "Q_LONG_RUN": "bieg długi",
+    "Q_INTERVALS": "interwały",
+    "Q_RECOVERY": "regeneracja",
+    "Q_ELEVATION": "przewyższenie",
+    "Q_TERRAIN": "nawierzchnia/teren",
+    "Q_VERTICAL": "trening pionowy",
+    "Q_PACE_TRAIL": "tempo w terenie",
+    "Q_GEAR_TRAIL": "sprzęt trail",
+    # ROUTE
+    "ROUTE_REQUEST": "planowanie trasy",
+    "ROUTE_LOCATION": "lokalizacja tras",
+    "ROUTE_SURFACE": "nawierzchnia trasy",
+    "ROUTE_SAFETY": "bezpieczeństwo tras",
+    # NUTRITION
+    "NUTRITION_PRE": "żywienie przed treningiem",
+    "NUTRITION_DURING": "żywienie podczas treningu",
+    "NUTRITION_POST": "żywienie po treningu",
+    "NUTRITION_RACE": "żywienie startowe",
+    "NUTRITION_WEIGHT": "masa ciała i waga",
+    # RACE
+    "RACE_SELECT": "wybór wyścigu",
+    "RACE_PREP": "przygotowanie do wyścigu",
+    "RACE_STRATEGY": "strategia wyścigowa",
+    "RACE_POST": "regeneracja po wyścigu",
+    "RACE_TAPER": "tapering",
+    # GEAR
+    "GEAR_SHOES_ROAD": "buty szosowe",
+    "GEAR_SHOES_TRAIL": "buty trail",
+    "GEAR_WATCH": "zegarek sportowy",
+    "GEAR_PACK": "plecak biegowy",
+    "GEAR_POLES": "kijki do biegania",
+    "GEAR_CLOTHING_WEATHER": "odzież do warunków pogodowych",
+    "GEAR_CLOTHING_SUMMER": "odzież letnia",
+    "GEAR_LAYERING_TRAIL": "warstwowanie odzieży trail",
+    "GEAR_RAIN_GEAR": "sprzęt przeciwdeszczowy",
+}
+
 # ─── Classifier system prompt ─────────────────────────────────────────────────
 
 CLASSIFIER_SYSTEM_PROMPT = """Classify the user message into exactly one intent and one subtype.
@@ -336,7 +378,7 @@ def handle_question_node(state: AgentState) -> AgentState:
         "- Nie pytaj o cele tygodniowe ani samopoczucie.\n"
         "- Jeśli pytanie dotyczy dyscypliny której nie znasz — odpowiedz ogólnie.\n"
         "- Odpowiedź po polsku.\n"
-        f"- Kontekst pytania: {state.subtype}\n"
+        f"- Kontekst pytania: {_SUBTYPE_LABELS.get(state.subtype or '', 'ogólny')}\n"
         f"- Dyscyplina: {state.discipline or 'both'}"
     )
 
@@ -389,7 +431,7 @@ def handle_route_node(state: AgentState) -> AgentState:
     system_prompt = (
         ANSWER_FIRST_RULE
         + "Jesteś ekspertem w planowaniu tras biegowych. Odpowiadasz po polsku.\n"
-        f"Typ zapytania: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        f"Typ zapytania: {_SUBTYPE_LABELS.get(state.subtype or '', 'trasa biegowa')}. Dyscyplina: {state.discipline or 'both'}.\n"
         "Jeśli lokalizacja jest podana — zasugeruj trasy od razu.\n"
         "Jeśli brakuje lokalizacji — zapytaj TYLKO o lokalizację, nic więcej.\n"
         "Nie pytaj o samopoczucie ani stan zdrowia."
@@ -411,7 +453,7 @@ def handle_nutrition_node(state: AgentState) -> AgentState:
     system_prompt = (
         ANSWER_FIRST_RULE
         + "Jesteś ekspertem w żywieniu sportowym dla biegaczy. Odpowiadasz po polsku.\n"
-        f"Kontekst: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        f"Kontekst: {_SUBTYPE_LABELS.get(state.subtype or '', 'żywienie sportowe')}. Dyscyplina: {state.discipline or 'both'}.\n"
         "Odpowiedz bezpośrednio na pytanie. Nie wspominaj o obciążeniu treningowym ani zmęczeniu."
     )
 
@@ -431,7 +473,7 @@ def handle_race_node(state: AgentState) -> AgentState:
     system_prompt = (
         ANSWER_FIRST_RULE
         + "Jesteś ekspertem w przygotowaniach startowych i strategii wyścigowej. Odpowiadasz po polsku.\n"
-        f"Kontekst: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        f"Kontekst: {_SUBTYPE_LABELS.get(state.subtype or '', 'przygotowania startowe')}. Dyscyplina: {state.discipline or 'both'}.\n"
         "Odpowiedz bezpośrednio. Nie pytaj o zdrowie ani samopoczucie przed odpowiedzią.\n"
         "Jeśli brakuje daty startu — zapytaj TYLKO o datę startu, nic więcej."
     )
@@ -489,7 +531,7 @@ def handle_gear_node(state: AgentState) -> AgentState:
     system_prompt = (
         ANSWER_FIRST_RULE
         + "Użytkownik pyta o sprzęt lub ubranie. Jesteś ekspertem w sprzęcie biegowym.\n"
-        f"Typ pytania: {state.subtype}. Dyscyplina: {state.discipline or 'both'}.\n"
+        f"Typ pytania: {_SUBTYPE_LABELS.get(state.subtype or '', 'sprzęt biegowy')}. Dyscyplina: {state.discipline or 'both'}.\n"
         "Zasady:\n"
         "- Odpowiedz bezpośrednio. Jeśli temperatura jest podana — użyj jej od razu.\n"
         "- Nie pytaj o cele tygodniowe. Nie analizuj Stravy.\n"
