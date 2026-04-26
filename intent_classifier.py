@@ -286,6 +286,13 @@ _DEFAULT_SUBTYPE: Dict[str, str] = {
 
 def classify_intent(message: str) -> Dict[str, Any]:
     """Call Groq to classify message. Returns dict with intent/subtype/confidence/discipline."""
+    print(f"CLASSIFIER INPUT: {message[:100]}")
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        print("CALLING GROQ: False — GROQ_API_KEY not set")
+        print("CLASSIFIER RESULT: QUESTION / Q_LONG_RUN | reason: no_api_key")
+        return FALLBACK.copy()
+    print("CALLING GROQ: True")
     try:
         raw = _call_llm(message, system_prompt=CLASSIFIER_SYSTEM_PROMPT, max_tokens=150)
         print(f"RAW CLASSIFIER: {raw!r}")
@@ -307,11 +314,16 @@ def classify_intent(message: str) -> Dict[str, Any]:
             print(f"[IntentClassifier] invalid intent '{intent}' → QUESTION/Q_OTHER for: {message!r}")
             intent = "QUESTION"
             subtype = "Q_OTHER"
+            print(f"CLASSIFIER RESULT: {intent} / {subtype} | reason: invalid_intent")
 
         elif subtype not in VALID_SUBTYPES.get(intent, set()):
             fixed = _DEFAULT_SUBTYPE.get(intent, "Q_OTHER")
             print(f"[IntentClassifier] invalid subtype '{subtype}' for intent={intent} → {fixed}")
             subtype = fixed
+            print(f"CLASSIFIER RESULT: {intent} / {subtype} | reason: invalid_subtype_fixed")
+
+        else:
+            print(f"CLASSIFIER RESULT: {intent} / {subtype} | reason: groq_ok (conf={confidence:.2f})")
 
         if confidence < 0.4:
             print(f"[IntentClassifier] low confidence {confidence:.2f} for: {message!r}")
@@ -320,11 +332,11 @@ def classify_intent(message: str) -> Dict[str, Any]:
 
     except json.JSONDecodeError as e:
         traceback.print_exc()
-        print(f"[IntentClassifier] FALLBACK: JSON parse error for: {message!r} — {e}")
+        print(f"CLASSIFIER RESULT: QUESTION / Q_LONG_RUN | reason: json_parse_error — {e}")
         return FALLBACK.copy()
     except Exception as e:
         traceback.print_exc()
-        print(f"[IntentClassifier] FALLBACK: unexpected error for: {message!r} — {e}")
+        print(f"CLASSIFIER RESULT: QUESTION / Q_LONG_RUN | reason: {type(e).__name__}: {e}")
         return FALLBACK.copy()
 
 
