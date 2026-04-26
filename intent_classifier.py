@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import traceback
 from typing import Any, Dict, List, Optional
 
 from groq import Groq
@@ -245,14 +247,25 @@ def _call_llm(user_prompt: str, system_prompt: str = "", max_tokens: int = 150) 
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": user_prompt})
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=max_tokens,
-        top_p=0.9,
-    )
-    return response.choices[0].message.content
+
+    last_exc: Exception = RuntimeError("no attempts made")
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.1,
+                max_tokens=max_tokens,
+                top_p=0.9,
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            last_exc = e
+            if attempt < 2:
+                delay = 2 ** attempt  # 1s then 2s
+                print(f"[RUS-25] Groq retry {attempt + 1}/3 after {delay}s: {type(e).__name__}: {e}")
+                time.sleep(delay)
+    raise last_exc
 
 
 def _safe_call_llm(
@@ -264,11 +277,12 @@ def _safe_call_llm(
     try:
         return _call_llm(user_prompt, system_prompt=system_prompt, max_tokens=max_tokens)
     except Exception as e:
-        msg = f"[IntentClassifier] handler LLM failed: {e}"
+        msg = f"[RUS-25] AGENT ERROR: {type(e).__name__}: {e}"
         if state:
             state.log(msg)
         else:
             print(msg)
+        traceback.print_exc()
         return ""
 
 
@@ -456,7 +470,7 @@ def handle_question_node(state: AgentState) -> AgentState:
 
     response = _safe_call_llm(message, system_prompt=system_prompt, max_tokens=300, state=state)
     if not response:
-        response = "Przepraszam, nie mogę teraz odpowiedzieć na to pytanie. Spróbuj ponownie."
+        response = "Coś poszło nie tak po stronie AI — napisz ponownie, a odpowiem."
 
     _append_response(state, response)
     state.user_feedback = ""  # prevent think → revise_plan from triggering
