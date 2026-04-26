@@ -12,6 +12,19 @@ from groq import Groq
 
 from agent_state import AgentState
 
+
+def get_secret(key: str) -> str:
+    value = None
+    try:
+        import streamlit as st
+        value = st.secrets.get(key)
+    except Exception:
+        value = None
+    value = value or os.getenv(key)
+    if not value:
+        raise ValueError(f"Missing secret: {key}")
+    return value
+
 # Tkinter (hitl_dialog) — import leniwy w ask_user_node, żeby Streamlit Cloud / headless
 # mogły importować ten moduł bez _tkinter.
 
@@ -43,10 +56,11 @@ def _safe_call(module_name: str, candidate_functions: List[str], *args, **kwargs
 def _call_llm(user_prompt: str, max_tokens: int = 512, system_prompt: str = "") -> str:
     """
     Wywołanie modelu przez Groq API (OpenAI-compatible chat completions).
-    GROQ_API_KEY i GROQ_MODEL_ID pobierane z env.
+    GROQ_API_KEY i GROQ_MODEL_ID pobierane z env lub Streamlit secrets.
     """
     model = os.getenv("GROQ_MODEL_ID", "llama-3.3-70b-versatile")
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    print("CALLING GROQ: True")
+    client = Groq(api_key=get_secret("GROQ_API_KEY"))
 
     messages: List[Dict[str, str]] = []
     if system_prompt:

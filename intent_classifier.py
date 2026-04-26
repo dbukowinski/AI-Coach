@@ -2,11 +2,24 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from groq import Groq
 
 from agent_state import AgentState
+
+
+def get_secret(key: str) -> str:
+    value = None
+    try:
+        import streamlit as st
+        value = st.secrets.get(key)
+    except Exception:
+        value = None
+    value = value or os.getenv(key)
+    if not value:
+        raise ValueError(f"Missing secret: {key}")
+    return value
 
 
 # ─── Validation maps ──────────────────────────────────────────────────────────
@@ -21,6 +34,7 @@ VALID_SUBTYPES: Dict[str, set] = {
     "QUESTION": {
         "Q_PACE", "Q_ZONES", "Q_LONG_RUN", "Q_INTERVALS", "Q_RECOVERY",
         "Q_ELEVATION", "Q_TERRAIN", "Q_VERTICAL", "Q_PACE_TRAIL", "Q_GEAR_TRAIL",
+        "Q_OTHER",
     },
     "ROUTE": {"ROUTE_REQUEST", "ROUTE_LOCATION", "ROUTE_SURFACE", "ROUTE_SAFETY"},
     "NUTRITION": {
@@ -52,7 +66,7 @@ Return ONLY valid JSON, no explanation, no markdown, no backticks.
 Valid intents and subtypes:
 
 TRAINING_PLAN: PLAN_CREATE, PLAN_MODIFY, PLAN_REDUCE, PLAN_EXTEND, PLAN_EXPLAIN
-QUESTION: Q_PACE, Q_ZONES, Q_LONG_RUN, Q_INTERVALS, Q_RECOVERY, Q_ELEVATION, Q_TERRAIN, Q_VERTICAL, Q_PACE_TRAIL, Q_GEAR_TRAIL
+QUESTION: Q_PACE, Q_ZONES, Q_LONG_RUN, Q_INTERVALS, Q_RECOVERY, Q_ELEVATION, Q_TERRAIN, Q_VERTICAL, Q_PACE_TRAIL, Q_GEAR_TRAIL, Q_OTHER
 ROUTE: ROUTE_REQUEST, ROUTE_LOCATION, ROUTE_SURFACE, ROUTE_SAFETY
 NUTRITION: NUTRITION_PRE, NUTRITION_DURING, NUTRITION_POST, NUTRITION_RACE, NUTRITION_WEIGHT
 RACE: RACE_SELECT, RACE_PREP, RACE_STRATEGY, RACE_POST, RACE_TAPER
@@ -70,12 +84,14 @@ Response format:
 Rules:
 - discipline: "road" for road running, "trail" for mountains/trails, "both" if unclear
 - If unsure about intent, default to QUESTION
+- Q_LONG_RUN: only for specific questions about long run parameters (how long, how often, when in cycle)
+- Q_OTHER: general how-to questions, frustration, corrections, unclear or ambiguous questions
 - Never return anything outside the valid intents and subtypes listed above
 
 --- FEW-SHOT EXAMPLES ---
 
 User: "jak zrobić long run?"
-{"intent": "QUESTION", "subtype": "Q_LONG_RUN", "confidence": 0.97, "discipline": "both"}
+{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.88, "discipline": "both"}
 
 User: "co to jest tempo progowe?"
 {"intent": "QUESTION", "subtype": "Q_PACE", "confidence": 0.95, "discipline": "both"}
@@ -174,7 +190,22 @@ User: "jaki plecak na ultra?"
 {"intent": "GEAR", "subtype": "GEAR_PACK", "confidence": 0.95, "discipline": "trail"}
 
 User: "kiedy używać kijków?"
-{"intent": "GEAR", "subtype": "GEAR_POLES", "confidence": 0.93, "discipline": "trail"}"""
+{"intent": "GEAR", "subtype": "GEAR_POLES", "confidence": 0.93, "discipline": "trail"}
+
+User: "znów coś mylisz"
+{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.82, "discipline": "both"}
+
+User: "nie o to mi chodziło"
+{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.80, "discipline": "both"}
+
+User: "wyjaśnij mi to jeszcze raz"
+{"intent": "QUESTION", "subtype": "Q_OTHER", "confidence": 0.83, "discipline": "both"}
+
+User: "ile trwa długi bieg?"
+{"intent": "QUESTION", "subtype": "Q_LONG_RUN", "confidence": 0.95, "discipline": "both"}
+
+User: "jak często robić long runy?"
+{"intent": "QUESTION", "subtype": "Q_LONG_RUN", "confidence": 0.94, "discipline": "both"}"""
 
 
 # ─── Answer-first global rule ────────────────────────────────────────────────
@@ -193,7 +224,8 @@ ANSWER_FIRST_RULE = (
 
 def _call_llm(user_prompt: str, system_prompt: str = "", max_tokens: int = 150) -> str:
     model = os.getenv("GROQ_MODEL_ID", "llama-3.3-70b-versatile")
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    print("CALLING GROQ: True")
+    client = Groq(api_key=get_secret("GROQ_API_KEY"))
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -227,10 +259,11 @@ def _safe_call_llm(
 
 # ─── Core classification ──────────────────────────────────────────────────────
 
-def classify_intent(message: str) -> Dict[str, Any]:
+def classify_intent(message: str, history: Optional[List] = None) -> Dict[str, Any]:
     """Call Groq to classify message. Returns dict with intent/subtype/confidence/discipline."""
     try:
         raw = _call_llm(message, system_prompt=CLASSIFIER_SYSTEM_PROMPT, max_tokens=150)
+        print(f"RAW CLASSIFIER: {raw}")
         text = raw.strip()
 
         # Strip markdown fences if present
