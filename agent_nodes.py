@@ -1168,65 +1168,108 @@ def streamlit_seed_coaching_messages(state: AgentState) -> AgentState:
     return state
 
 
+# ---------------------------------------------------------------------------
+# Uproszczona architektura Streamlit: binarne PLAN / CHAT
+# ---------------------------------------------------------------------------
+
+_PLAN_OR_CHAT_SYSTEM = (
+    "Jesteś trenerem biegowym. Przeczytaj wiadomość zawodnika.\n\n"
+    "Jeśli użytkownik chce STWORZYĆ lub ZMODYFIKOWAĆ plan treningowy "
+    "(zmienić dni wolne, objętość, intensywność, układ sesji, liczbę dni): "
+    "odpowiedz TYLKO jednym słowem: PLAN\n\n"
+    "W każdym innym przypadku odpowiedz bezpośrednio w maksymalnie 4–5 zdaniach po polsku. "
+    "Nie pytaj o zmęczenie ani cele przed udzieleniem odpowiedzi."
+)
+
+_DIRECT_COACH_SYSTEM = (
+    "Jesteś doświadczonym trenerem biegowym. Odpowiedz bezpośrednio na wiadomość zawodnika.\n"
+    "• Odpowiadaj NATYCHMIAST — bez pytania o zmęczenie, obciążenie ani cele\n"
+    "• Maksymalnie 4–5 zdań konkretnej, eksperckiej odpowiedzi\n"
+    "• Po odpowiedzi możesz zadać JEDNO pytanie jeśli naprawdę potrzebujesz\n"
+    "• Pisz po polsku, naturalnym językiem trenera"
+)
+
+
+def _plan_or_direct(state: AgentState, message: str) -> Tuple[str, bool]:
+    """
+    Jeden call LLM: jeśli odpowiedź to 'PLAN' — zwraca ('PLAN', True).
+    W przeciwnym razie zwraca bezpośrednią odpowiedź trenera i False.
+    """
+    history = state.messages[-6:] if state.messages else []
+    msgs: List[Dict[str, str]] = [{"role": "system", "content": _PLAN_OR_CHAT_SYSTEM}]
+    for m in history:
+        if m.get("role") in ("user", "assistant"):
+            msgs.append({"role": m["role"], "content": m["content"]})
+    msgs.append({"role": "user", "content": message})
+
+    try:
+        client = Groq(api_key=get_secret("GROQ_API_KEY"))
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=msgs,
+            max_tokens=300,
+            temperature=0.4,
+        )
+        reply = resp.choices[0].message.content.strip()
+        print(f"[Streamlit] plan_or_direct raw='{reply[:80]}'")
+        if reply.upper().startswith("PLAN"):
+            return "PLAN", True
+        return reply, False
+    except Exception as e:
+        print(f"[Streamlit] plan_or_direct error: {e}")
+        return "Przepraszam, chwilowy problem z połączeniem. Spróbuj ponownie.", False
+
+
+def _direct_coach_reply(state: AgentState, message: str) -> str:
+    """Bezpośrednia odpowiedź trenera bez klasyfikacji intencji."""
+    history = state.messages[-6:] if state.messages else []
+    msgs: List[Dict[str, str]] = [{"role": "system", "content": _DIRECT_COACH_SYSTEM}]
+    for m in history:
+        if m.get("role") in ("user", "assistant"):
+            msgs.append({"role": m["role"], "content": m["content"]})
+    msgs.append({"role": "user", "content": message})
+
+    try:
+        client = Groq(api_key=get_secret("GROQ_API_KEY"))
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=msgs,
+            max_tokens=400,
+            temperature=0.5,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"[Streamlit] direct_coach_reply error: {e}")
+        return "Przepraszam, chwilowy problem z połączeniem. Spróbuj ponownie."
+
+
 def streamlit_coach_after_user(state: AgentState, user_text: str) -> Tuple[AgentState, bool]:
     """
-    Jedna tura: wiadomość użytkownika + odpowiedź modelu.
-    Klasyfikuje intent — dla QUESTION/GEAR/etc. odpowiada bezpośrednio;
-    dla TRAINING_PLAN kontynuuje dialog coachingowy.
+    Jedna tura przed planem: wiadomość użytkownika + odpowiedź modelu.
+    Binarny wybór: PLAN (kontynuuj dialog coachingowy) lub bezpośrednia odpowiedź.
     Zwraca (stan, plan_ready).
     """
-    from intent_classifier import (
-        intent_classifier_node,
-        handle_question_node,
-        handle_gear_node,
-        handle_route_node,
-        handle_nutrition_node,
-        handle_race_node,
-        handle_context_info_node,
-    )
-
     text = (user_text or "").strip()
     if not text:
         return state, False
 
     state.messages.append({"role": "user", "content": text})
-    state.user_message = text
-    state.user_feedback = text
 
-    # Classify intent first
-    state = intent_classifier_node(state)
-    intent = state.intent or "QUESTION"
+    reply, wants_plan = _plan_or_direct(state, text)
 
-    print(f"[Streamlit] coach_after_user intent={intent}/{state.subtype}")
+    if wants_plan:
+        # Kontynuuj dialog coachingowy — generuj plan
+        state.user_feedback = ""
+        coach_reply, done = _coach_turn_llm(state)
+        if not coach_reply and not done:
+            coach_reply = "Dzięki za rozmowę — przechodzę do ułożenia planu."
+            done = True
+        state.messages.append({"role": "assistant", "content": coach_reply})
+        return state, done
 
-    # Non-plan intents: answer directly, never ask about load/goals
-    if intent == "QUESTION":
-        state = handle_question_node(state)
-        return state, False
-    if intent == "GEAR":
-        state = handle_gear_node(state)
-        return state, False
-    if intent == "ROUTE":
-        state = handle_route_node(state)
-        return state, False
-    if intent == "NUTRITION":
-        state = handle_nutrition_node(state)
-        return state, False
-    if intent == "RACE":
-        state = handle_race_node(state)
-        return state, False
-    if intent == "CONTEXT_INFO":
-        state = handle_context_info_node(state)
-        return state, False
-
-    # TRAINING_PLAN or unknown: continue pre-plan coaching dialog
-    state.user_feedback = ""  # prevent think → revise_plan
-    reply, done = _coach_turn_llm(state)
-    if not reply and not done:
-        reply = "Dzięki za rozmowę — przechodzę do ułożenia planu."
-        done = True
+    # Bezpośrednia odpowiedź (pytanie, sprzęt, żywienie, trasa, itp.)
     state.messages.append({"role": "assistant", "content": reply})
-    return state, done
+    return state, False
 
 
 def streamlit_finalize_coaching_and_plan(state: AgentState) -> AgentState:
@@ -1244,56 +1287,24 @@ def streamlit_finalize_coaching_and_plan(state: AgentState) -> AgentState:
 def streamlit_revise_plan_after_user(state: AgentState, user_text: str) -> AgentState:
     """
     Kontynuacja dialogu PO wygenerowaniu planu.
-    Klasyfikuje intent — dla QUESTION/GEAR/etc. odpowiada bezpośrednio (bez rewizji planu);
-    dla TRAINING_PLAN przepuszcza przez revise_plan_node.
+    Binarny wybór: PLAN (rewizja planu) lub bezpośrednia odpowiedź trenera.
     """
-    from intent_classifier import (
-        intent_classifier_node,
-        handle_question_node,
-        handle_gear_node,
-        handle_route_node,
-        handle_nutrition_node,
-        handle_race_node,
-        handle_context_info_node,
-    )
-
     text = (user_text or "").strip()
     if not text:
         return state
 
     state.messages.append({"role": "user", "content": text})
-    state.user_message = text
-    state.user_feedback = text
 
-    # Classify intent first
-    state = intent_classifier_node(state)
-    intent = state.intent or "QUESTION"
+    reply, wants_plan = _plan_or_direct(state, text)
 
-    print(f"[Streamlit] revise_after_user intent={intent}/{state.subtype}")
-
-    # Non-plan intents: answer directly, don't touch the plan
-    if intent == "QUESTION":
-        state = handle_question_node(state)
-        return state
-    if intent == "GEAR":
-        state = handle_gear_node(state)
-        return state
-    if intent == "ROUTE":
-        state = handle_route_node(state)
-        return state
-    if intent == "NUTRITION":
-        state = handle_nutrition_node(state)
-        return state
-    if intent == "RACE":
-        state = handle_race_node(state)
-        return state
-    if intent == "CONTEXT_INFO":
-        state = handle_context_info_node(state)
+    if wants_plan:
+        state.user_feedback = text
+        state = revise_plan_node(state)
+        plan_reply = (state.coach_question or "").strip() or "Zaktualizowałem plan. Co jeszcze dopracować?"
+        state.messages.append({"role": "assistant", "content": plan_reply})
         return state
 
-    # TRAINING_PLAN: revise the plan (user_feedback already set)
-    state = revise_plan_node(state)
-    reply = (state.coach_question or "").strip() or "Zaktualizowałem plan. Co jeszcze dopracować?"
+    # Bezpośrednia odpowiedź (pytanie, sprzęt, żywienie, trasa, itp.)
     state.messages.append({"role": "assistant", "content": reply})
     return state
 

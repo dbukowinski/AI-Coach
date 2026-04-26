@@ -518,11 +518,6 @@ with chat_col:
                 role = msg.get("role", "user")
                 with st.chat_message(role, avatar="🏃" if role == "assistant" else "👤"):
                     st.markdown(msg.get("content", ""))
-            if agent.intent:
-                st.write(
-                    f"🔍 DEBUG — Intent: {agent.intent or 'MISSING'} | "
-                    f"Subtype: {agent.subtype or 'MISSING'}"
-                )
         elif not agent:
             st.info('Włącz demo lub kliknij „Przygotuj dane i briefing” w panelu bocznym.')
         elif agent.errors:
