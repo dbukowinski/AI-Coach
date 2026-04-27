@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional
 
 
 ModeType = Literal["full", "analysis"]
@@ -41,8 +41,6 @@ class AgentState:
         "'wolne we wtorek', 'środa jakościowa', 'w weekend mam czas', "
         "'maks 4 dni treningowe', 'max 2–3 treningi dziennie'."
     )
-    dialog_history: List[Tuple[str, str]] = field(default_factory=list)  # (role, text)
-
     # pre-plan coaching dialog (data-led, reactive)
     training_summary: Dict[str, Any] = field(default_factory=dict)
     patterns: List[str] = field(default_factory=list)

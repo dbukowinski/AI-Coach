@@ -1493,7 +1493,7 @@ def ask_user_node(state: AgentState) -> AgentState:
 
     # Domyślnie – pełne okno Tkinter w formie dialogu z trenerem
     # jeśli nie ma historii (pierwsze odpalenie), pokaż inicjalne pytanie trenera
-    if not state.coach_question and not state.dialog_history:
+    if not state.coach_question:
         state.coach_question = (
             "Co chcesz zmienić w tym planie? Napisz normalnie, np. "
             "'wolne we wtorek', 'środa jakościowa', 'w weekend mam czas', "
@@ -1513,7 +1513,7 @@ def ask_user_node(state: AgentState) -> AgentState:
     accepted, feedback = show_hitl_dialog(
         state.plan_draft,
         coach_question=state.coach_question,
-        history=state.dialog_history,
+        history=state.messages,
     )
 
     if accepted:
@@ -1549,7 +1549,7 @@ def revise_plan_node(state: AgentState) -> AgentState:
 
     try:
         # Dopisz do historii dialogu
-        state.dialog_history.append(("user", feedback))
+        state.messages.append({"role": "user", "content": feedback})
 
         before_state = (
             state.max_weekly_minutes,
@@ -1638,7 +1638,7 @@ def revise_plan_node(state: AgentState) -> AgentState:
                     f"OK. Chcesz trenować maksymalnie {state.max_training_days} dni w tygodniu. "
                     f"Potrzebuję {need} dni wolnych: które dni wybierasz?"
                 )
-                state.dialog_history.append(("coach", state.coach_question))
+                state.messages.append({"role": "assistant", "content": state.coach_question})
                 state.user_feedback = ""
                 state.plan_accepted = False
                 return state
@@ -1669,7 +1669,7 @@ def revise_plan_node(state: AgentState) -> AgentState:
             state.explanation = state.plan_draft.get("explanation", state.explanation)
             _save_json(DATA_DIR / "training_plan_current.json", state.plan_draft)
             state.coach_question = "OK — ułożyłem plan pod Twoje preferencje. Co jeszcze dopracować?"
-            state.dialog_history.append(("coach", state.coach_question))
+            state.messages.append({"role": "assistant", "content": state.coach_question})
         else:
             # fallback: revise plan via rules/LLM (for fine-grained edits)
             before = copy.deepcopy(state.plan_draft)
@@ -1698,7 +1698,7 @@ def revise_plan_node(state: AgentState) -> AgentState:
             else:
                 state.coach_question = "Zaktualizowałem plan. Co jeszcze dopracować?"
 
-            state.dialog_history.append(("coach", state.coach_question))
+            state.messages.append({"role": "assistant", "content": state.coach_question})
     except Exception as e:
         state.add_error(f"revise_plan failed: {e}")
         state.done = True

@@ -40,17 +40,18 @@ def _format_plan_text(plan: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _format_chat(history: List[Tuple[str, str]], coach_question: str) -> str:
+def _format_chat(history: List[Dict[str, str]], coach_question: str) -> str:
     lines: List[str] = []
     if history:
-        for role, msg in history[-20:]:
-            who = "Coach" if role == "coach" else "You"
+        for item in history[-20:]:
+            role, msg = item["role"], item["content"]
+            who = "Coach" if role == "assistant" else "You"
             lines.append(f"{who}: {msg}")
             lines.append("")
     if coach_question:
         # avoid duplicating the same coach question twice (history + current)
         last = history[-1] if history else None
-        if not (last and last[0] == "coach" and last[1].strip() == coach_question.strip()):
+        if not (last and last["role"] == "assistant" and last["content"].strip() == coach_question.strip()):
             lines.append("Coach: " + coach_question)
     return "\n".join(lines).strip()
 
@@ -58,7 +59,7 @@ def _format_chat(history: List[Tuple[str, str]], coach_question: str) -> str:
 def show_hitl_dialog(
     plan: Dict[str, Any],
     coach_question: str = "",
-    history: Optional[List[Tuple[str, str]]] = None,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[bool, str]:
     """
     Pokazuje plan i pozwala użytkownikowi odpowiedzieć jak w rozmowie z trenerem.
