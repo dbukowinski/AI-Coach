@@ -1175,16 +1175,6 @@ def streamlit_coach_after_user(state: AgentState, user_text: str) -> Tuple[Agent
     dla TRAINING_PLAN kontynuuje dialog coachingowy.
     Zwraca (stan, plan_ready).
     """
-    from intent_classifier import (
-        intent_classifier_node,
-        handle_question_node,
-        handle_gear_node,
-        handle_route_node,
-        handle_nutrition_node,
-        handle_race_node,
-        handle_context_info_node,
-    )
-
     text = (user_text or "").strip()
     if not text:
         return state, False
@@ -1247,16 +1237,6 @@ def streamlit_revise_plan_after_user(state: AgentState, user_text: str) -> Agent
     Klasyfikuje intent — dla QUESTION/GEAR/etc. odpowiada bezpośrednio (bez rewizji planu);
     dla TRAINING_PLAN przepuszcza przez revise_plan_node.
     """
-    from intent_classifier import (
-        intent_classifier_node,
-        handle_question_node,
-        handle_gear_node,
-        handle_route_node,
-        handle_nutrition_node,
-        handle_race_node,
-        handle_context_info_node,
-    )
-
     text = (user_text or "").strip()
     if not text:
         return state
@@ -1296,6 +1276,111 @@ def streamlit_revise_plan_after_user(state: AgentState, user_text: str) -> Agent
     reply = (state.coach_question or "").strip() or "Zaktualizowałem plan. Co jeszcze dopracować?"
     state.messages.append({"role": "assistant", "content": reply})
     return state
+
+# ── Nowy reasoning loop ──────────────────────────────────────────────────────
+
+_COACH_SYSTEM_PROMPT = (
+    "Jesteś doświadczonym trenerem biegowym AI o imieniu Coach.\n"
+    "Masz dostęp do danych treningowych sportowca ze Stravy.\n"
+    "Odpowiadasz po polsku, bezpośrednio i konkretnie — masz zdanie, nie jesteś formularzem.\n"
+    "Zadajesz jedno pytanie na raz. Cytujesz dane gdy wzmacniają obserwację.\n"
+    "Gdy wiesz już wystarczająco dużo (cel, dostępność dni, ewentualne zmęczenie) "
+    "— kończ odpowiedź tokenem PLAN_READY (samodzielnie, bez tekstu po nim).\n"
+    "Po wygenerowaniu planu: odpowiadasz na pytania i rewizujesz plan zgodnie z feedbackiem."
+)
+
+
+def _build_training_context(state: AgentState) -> str:
+    parts: List[str] = []
+    if state.weekly_summary:
+        parts.append(f"Dane tygodniowe: {json.dumps(state.weekly_summary, ensure_ascii=False)}")
+    if state.four_week_summary:
+        parts.append(f"Średnia 4 tygodnie: {json.dumps(state.four_week_summary, ensure_ascii=False)}")
+    if state.flags:
+        parts.append(f"Flagi ryzyka: {', '.join(state.flags)}")
+    if state.plan_draft:
+        sessions_brief = [
+            f"{s.get('date')} {s.get('session_type')} {s.get('duration')} {s.get('intensity')}"
+            for s in (state.plan_draft.get("sessions") or [])
+        ]
+        parts.append("Aktualny plan:\n" + "\n".join(sessions_brief))
+    return "\n".join(parts)
+
+
+def _check_plan_ready(reply: str) -> Tuple[bool, str]:
+    marker = "PLAN_READY"
+    if marker in reply:
+        return True, reply.replace(marker, "").strip()
+    return False, reply.strip()
+
+
+def streamlit_coach_turn(state: AgentState, user_text: str) -> Tuple[AgentState, bool]:
+    """
+    Jedna tura dialogu — działa przed i po planie. Bez klasyfikatora.
+    Zwraca (state, plan_ready).
+    """
+    from langchain_groq import ChatGroq
+    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+    from strava_tools import compute_weekly_load, detect_training_flags
+
+    text = (user_text or "").strip()
+    if not text:
+        return state, False
+
+    state.messages.append({"role": "user", "content": text})
+
+    llm = ChatGroq(
+        model=os.getenv("GROQ_MODEL_ID", "llama-3.3-70b-versatile"),
+        temperature=0.3,
+        api_key=get_secret("GROQ_API_KEY"),
+    )
+    tools = [compute_weekly_load, detect_training_flags]
+    llm_with_tools = llm.bind_tools(tools)
+
+    context = _build_training_context(state)
+    system_content = _COACH_SYSTEM_PROMPT
+    if context:
+        system_content += f"\n\n--- Dane sportowca ---\n{context}"
+
+    lc_messages = [SystemMessage(content=system_content)]
+    for m in state.messages[-20:]:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "user":
+            lc_messages.append(HumanMessage(content=content))
+        else:
+            lc_messages.append(AIMessage(content=content))
+
+    try:
+        response = llm_with_tools.invoke(lc_messages)
+
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            lc_messages.append(response)
+            tool_map = {t.name: t for t in tools}
+            for tc in response.tool_calls:
+                tool = tool_map.get(tc["name"])
+                if tool:
+                    result = tool.invoke(tc["args"])
+                    lc_messages.append(
+                        ToolMessage(content=str(result), tool_call_id=tc["id"])
+                    )
+            response = llm_with_tools.invoke(lc_messages)
+
+        reply = (response.content or "").strip()
+    except Exception as e:
+        state.log(f"streamlit_coach_turn LLM failed: {e}")
+        reply = "Przepraszam, coś poszło nie tak. Spróbuj jeszcze raz."
+
+    plan_ready, reply = _check_plan_ready(reply)
+
+    if reply:
+        state.messages.append({"role": "assistant", "content": reply})
+
+    state.intent = None
+    state.subtype = None
+
+    return state, plan_ready
+
 
 def build_streamlit_demo_agent_state() -> AgentState:
     """

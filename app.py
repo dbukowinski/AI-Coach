@@ -16,9 +16,8 @@ import streamlit as st
 from agent_state import AgentState
 from agent_nodes import (
     build_streamlit_demo_agent_state,
-    streamlit_coach_after_user,
+    streamlit_coach_turn,
     streamlit_finalize_coaching_and_plan,
-    streamlit_revise_plan_after_user,
 )
 from streamlit_runner import run_sync_pipeline_to_coaching_brief
 
@@ -534,14 +533,9 @@ with chat_col:
     ):
         if agent:
             with st.spinner("Coach myśli…"):
-                # Przed planem: dialog coachingowy -> PLAN_READY -> generowanie planu
-                if not agent.plan_draft:
-                    agent, plan_ready = streamlit_coach_after_user(agent, prompt)
-                    if plan_ready:
-                        agent = streamlit_finalize_coaching_and_plan(agent)
-                # Po planie: kolejne wiadomości rewizują plan
-                else:
-                    agent = streamlit_revise_plan_after_user(agent, prompt)
+                agent, plan_ready = streamlit_coach_turn(agent, prompt)
+                if plan_ready and not agent.plan_draft:
+                    agent = streamlit_finalize_coaching_and_plan(agent)
                 st.session_state.agent = agent
         st.rerun()
 

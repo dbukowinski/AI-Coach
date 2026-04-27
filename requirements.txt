@@ -1,4 +1,5 @@
 langgraph
+langchain-groq
 requests
 python-dotenv
 groq
