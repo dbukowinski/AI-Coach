@@ -266,14 +266,43 @@ def _safe_call_llm(
     state: Optional[AgentState] = None,
 ) -> str:
     try:
-        return _call_llm(user_prompt, system_prompt=system_prompt, max_tokens=max_tokens)
+        result = _call_llm(user_prompt, system_prompt=system_prompt, max_tokens=max_tokens)
+        if result:
+            return result
     except Exception as e:
         msg = f"[IntentClassifier] handler LLM failed: {e}"
         if state:
             state.log(msg)
         else:
             print(msg)
-        return ""
+
+    # Universal fallback: replay the full conversation with the persona system prompt.
+    # This handles mis-classified intents where a narrow system prompt confuses the
+    # LLM into returning an empty response. Giving the model the conversation history
+    # lets it reason from context regardless of how the message was classified.
+    if state and getattr(state, "messages", None):
+        try:
+            model = os.getenv("GROQ_MODEL_ID", "llama-3.3-70b-versatile")
+            client = Groq(api_key=get_secret("GROQ_API_KEY"))
+            conv = [{"role": "system", "content": ANSWER_FIRST_RULE}]
+            conv.extend(state.messages[-12:])
+            response = client.chat.completions.create(
+                model=model,
+                messages=conv,
+                temperature=0.3,
+                max_tokens=max_tokens,
+                top_p=0.9,
+            )
+            content = response.choices[0].message.content
+            if content:
+                if state:
+                    state.log("[IntentClassifier] universal context fallback used")
+                return content
+        except Exception as e2:
+            if state:
+                state.log(f"[IntentClassifier] universal fallback also failed: {e2}")
+
+    return ""
 
 
 # ─── Core classification ──────────────────────────────────────────────────────
